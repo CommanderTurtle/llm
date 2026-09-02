@@ -1,21 +1,59 @@
-export const CONVERSATION_SCHEMA = "https://llm.shel.sh/schemas/conversation-v1.json";
-export const CONVERSATION_VERSION = 1;
+export const CONVERSATION_SCHEMA = "https://llm.shel.sh/schemas/conversation-v2.json";
+export const LEGACY_CONVERSATION_SCHEMA = "https://llm.shel.sh/schemas/conversation-v1.json";
+export const CONVERSATION_VERSION = 2;
 
-const SUPPORTED_ROLES = new Set(["system", "developer", "user", "assistant"]);
+const SUPPORTED_ROLES = new Set(["system", "developer", "user", "assistant", "tool"]);
+const REASONING_EFFORTS = new Set(["", "none", "minimal", "low", "medium", "high", "xhigh"]);
 
-export function messageId() {
+export function messageId(prefix = "msg") {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function stringArray(value) {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim()))]
+    : [];
+}
+
+function normalizeToolCall(value, index = 0) {
+  if (!value || typeof value !== "object") return null;
+  const fn = value.function && typeof value.function === "object" ? value.function : value;
+  const name = typeof fn.name === "string" ? fn.name.trim() : "";
+  if (!name) return null;
+  let argumentsText = fn.arguments;
+  if (typeof argumentsText !== "string") {
+    try {
+      argumentsText = JSON.stringify(argumentsText ?? {});
+    } catch {
+      argumentsText = "{}";
+    }
+  }
+  return {
+    id: typeof value.id === "string" && value.id ? value.id : `call_${messageId("tool").replace(/[^A-Za-z0-9_-]/g, "")}_${index}`,
+    type: "function",
+    function: { name, arguments: argumentsText },
+  };
 }
 
 export function createMessage(role, content = "", additions = {}) {
   if (!SUPPORTED_ROLES.has(role)) throw new TypeError(`Unsupported message role: ${role}`);
+  const now = new Date().toISOString();
+  const createdAt = additions.createdAt ?? now;
+  const toolCalls = Array.isArray(additions.toolCalls)
+    ? additions.toolCalls.map(normalizeToolCall).filter(Boolean)
+    : [];
   return {
     id: additions.id ?? messageId(),
     role,
-    content: String(content),
+    content: String(content ?? ""),
     reasoning: typeof additions.reasoning === "string" ? additions.reasoning : "",
-    createdAt: additions.createdAt ?? new Date().toISOString(),
+    attachments: stringArray(additions.attachments),
+    toolCalls,
+    toolCallId: typeof additions.toolCallId === "string" ? additions.toolCallId : "",
+    name: typeof additions.name === "string" ? additions.name : "",
+    createdAt,
+    updatedAt: additions.updatedAt ?? createdAt,
     state: additions.state ?? "complete",
     meta: additions.meta && typeof additions.meta === "object" ? { ...additions.meta } : {},
     error: typeof additions.error === "string" ? additions.error : "",
@@ -30,35 +68,74 @@ function finiteNumber(value, fallback, constraints = {}) {
   return number;
 }
 
+function booleanValue(value, fallback) {
+  if (value === true || value === false) return value;
+  if (typeof value === "string") {
+    if (value.toLowerCase() === "true") return true;
+    if (value.toLowerCase() === "false") return false;
+  }
+  return fallback;
+}
+
 export function normalizeParameters(parameters = {}) {
   const seedValue = parameters.seed;
   const seed = seedValue === "" || seedValue == null ? null : finiteNumber(seedValue, null);
+  const requestedEffort = typeof parameters.reasoningEffort === "string"
+    ? parameters.reasoningEffort
+    : typeof parameters.reasoning_effort === "string" ? parameters.reasoning_effort : "";
   return {
     temperature: finiteNumber(parameters.temperature, 0.6, { min: 0, max: 2 }),
     topP: finiteNumber(parameters.topP ?? parameters.top_p, 0.95, { min: 0, max: 1 }),
     maxTokens: Math.trunc(finiteNumber(parameters.maxTokens ?? parameters.max_tokens, 8192, { min: 1 })),
     seed: seed == null ? null : Math.trunc(seed),
+    reasoningEffort: REASONING_EFFORTS.has(requestedEffort) ? requestedEffort : "",
+    enableThinking: booleanValue(parameters.enableThinking ?? parameters.enable_thinking, true),
   };
 }
 
 function normalizeImportedMessage(value, index) {
-  if (!value || typeof value !== "object") {
-    throw new TypeError(`Message ${index + 1} must be an object.`);
-  }
+  if (!value || typeof value !== "object") throw new TypeError(`Message ${index + 1} must be an object.`);
   if (!SUPPORTED_ROLES.has(value.role)) {
     throw new TypeError(`Message ${index + 1} has unsupported role "${String(value.role)}".`);
   }
-  if (typeof value.content !== "string") {
+  if (typeof value.content !== "string" && value.content != null) {
     throw new TypeError(`Message ${index + 1} must have string content.`);
   }
+  if (value.role === "tool" && typeof (value.toolCallId ?? value.tool_call_id) !== "string") {
+    throw new TypeError(`Tool message ${index + 1} must name its tool call id.`);
+  }
 
-  return createMessage(value.role, value.content, {
+  return createMessage(value.role, value.content ?? "", {
     id: typeof value.id === "string" && value.id ? value.id : undefined,
     reasoning: typeof value.reasoning === "string" ? value.reasoning : "",
+    attachments: value.attachments,
+    toolCalls: value.toolCalls ?? value.tool_calls,
+    toolCallId: value.toolCallId ?? value.tool_call_id,
+    name: value.name,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : undefined,
-    state: "complete",
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : undefined,
+    state: value.state === "stopped" || value.state === "error" ? value.state : "complete",
     meta: value.meta,
+    error: value.error,
   });
+}
+
+function normalizeAttachment(value, index) {
+  if (!value || typeof value !== "object") throw new TypeError(`Attachment ${index + 1} must be an object.`);
+  if (typeof value.id !== "string" || !value.id) throw new TypeError(`Attachment ${index + 1} has no id.`);
+  if (typeof value.name !== "string" || !value.name) throw new TypeError(`Attachment ${index + 1} has no filename.`);
+  return {
+    id: value.id,
+    name: value.name,
+    type: typeof value.type === "string" ? value.type : "application/octet-stream",
+    size: Number.isFinite(Number(value.size)) ? Math.max(0, Number(value.size)) : 0,
+    kind: ["image", "text", "document", "archive"].includes(value.kind) ? value.kind : "text",
+    dataUrl: typeof value.dataUrl === "string" ? value.dataUrl : "",
+    text: typeof value.text === "string" ? value.text : "",
+    sourceFormat: typeof value.sourceFormat === "string" ? value.sourceFormat : "",
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
+    meta: value.meta && typeof value.meta === "object" ? { ...value.meta } : {},
+  };
 }
 
 export function parseConversationDocument(value) {
@@ -66,22 +143,45 @@ export function parseConversationDocument(value) {
   if (!source || typeof source !== "object") {
     throw new TypeError("Conversation JSON must be an object or an array of OpenAI-style messages.");
   }
-  if (source.schema === CONVERSATION_SCHEMA && Number(source.version) > CONVERSATION_VERSION) {
+  if (
+    (source.schema === CONVERSATION_SCHEMA || source.schema === LEGACY_CONVERSATION_SCHEMA)
+    && Number(source.version) > CONVERSATION_VERSION
+  ) {
     throw new TypeError(`Conversation version ${source.version} is newer than this page supports.`);
   }
-  if (!Array.isArray(source.messages)) {
-    throw new TypeError("Conversation JSON must contain a messages array.");
-  }
-  if (source.messages.length > 10_000) {
-    throw new TypeError("Conversation JSON contains more than 10,000 messages.");
-  }
+  if (!Array.isArray(source.messages)) throw new TypeError("Conversation JSON must contain a messages array.");
+  if (source.messages.length > 10_000) throw new TypeError("Conversation JSON contains more than 10,000 messages.");
+  const attachments = Array.isArray(source.attachments) ? source.attachments.map(normalizeAttachment) : [];
+  const attachmentIds = new Set(attachments.map((item) => item.id));
+  const messages = source.messages.map(normalizeImportedMessage);
+  for (const message of messages) message.attachments = message.attachments.filter((id) => attachmentIds.has(id));
 
   return {
+    title: typeof source.title === "string" && source.title.trim() ? source.title.trim() : "Imported chat",
     endpoint: typeof source.endpoint === "string" ? source.endpoint : "",
     model: typeof source.model === "string" ? source.model : "",
     systemPrompt: typeof source.systemPrompt === "string" ? source.systemPrompt : "",
     parameters: normalizeParameters(source.parameters),
-    messages: source.messages.map(normalizeImportedMessage),
+    messages,
+    attachments,
+  };
+}
+
+function exportedMessage(message) {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    ...(message.reasoning ? { reasoning: message.reasoning } : {}),
+    ...(message.attachments?.length ? { attachments: [...message.attachments] } : {}),
+    ...(message.toolCalls?.length ? { toolCalls: message.toolCalls.map((call) => normalizeToolCall(call)).filter(Boolean) } : {}),
+    ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+    ...(message.name ? { name: message.name } : {}),
+    createdAt: message.createdAt,
+    ...(message.updatedAt && message.updatedAt !== message.createdAt ? { updatedAt: message.updatedAt } : {}),
+    ...(message.state && message.state !== "complete" ? { state: message.state } : {}),
+    ...(Object.keys(message.meta ?? {}).length ? { meta: message.meta } : {}),
+    ...(message.error ? { error: message.error } : {}),
   };
 }
 
@@ -90,30 +190,83 @@ export function conversationDocument(state) {
     schema: CONVERSATION_SCHEMA,
     version: CONVERSATION_VERSION,
     exportedAt: new Date().toISOString(),
+    title: state.title || "Chat",
     endpoint: state.endpoint,
     model: state.model,
     systemPrompt: state.systemPrompt,
     parameters: normalizeParameters(state.parameters),
-    messages: state.messages.map((message) => ({
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      ...(message.reasoning ? { reasoning: message.reasoning } : {}),
-      createdAt: message.createdAt,
-      ...(Object.keys(message.meta ?? {}).length ? { meta: message.meta } : {}),
-    })),
+    attachments: (state.attachments ?? []).map((attachment, index) => normalizeAttachment(attachment, index)),
+    messages: state.messages.map(exportedMessage),
   };
 }
 
-export function apiMessages(messages, systemPrompt = "") {
+function attachmentText(attachment) {
+  if (!attachment?.text) return "";
+  return `\n\n<attachment name=${JSON.stringify(attachment.name)} type=${JSON.stringify(attachment.type)}>\n${attachment.text}\n</attachment>`;
+}
+
+function imageAttachmentText(attachment) {
+  return `\n\n<image_attachment id=${JSON.stringify(attachment.id)} name=${JSON.stringify(attachment.name)} type=${JSON.stringify(attachment.type)} />`;
+}
+
+export function apiMessages(messages, systemPrompt = "", attachments = []) {
   const result = [];
   if (systemPrompt.trim()) result.push({ role: "system", content: systemPrompt.trim() });
+  const attachmentMap = attachments instanceof Map ? attachments : new Map(attachments.map((item) => [item.id, item]));
 
   for (const message of messages) {
     if (!SUPPORTED_ROLES.has(message.role)) continue;
-    if (message.state === "error" && !message.content) continue;
-    if (!message.content) continue;
-    result.push({ role: message.role, content: message.content });
+    if (message.state === "error" && !message.content && !message.toolCalls?.length) continue;
+
+    if (message.role === "tool") {
+      if (!message.toolCallId || !message.content) continue;
+      result.push({ role: "tool", tool_call_id: message.toolCallId, ...(message.name ? { name: message.name } : {}), content: message.content });
+      continue;
+    }
+
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      result.push({
+        role: "assistant",
+        content: message.content || null,
+        tool_calls: message.toolCalls.map((call) => normalizeToolCall(call)).filter(Boolean),
+      });
+      continue;
+    }
+
+    const linked = (message.attachments ?? []).map((id) => attachmentMap.get(id)).filter(Boolean);
+    const images = linked.filter((item) => item.kind === "image" && item.dataUrl);
+    const text = `${message.content ?? ""}${images.map(imageAttachmentText).join("")}${linked.filter((item) => item.kind !== "image").map(attachmentText).join("")}`;
+    if (!text && !images.length) continue;
+
+    if (message.role === "user" && images.length) {
+      const content = [];
+      if (text) content.push({ type: "text", text });
+      for (const image of images) content.push({ type: "image_url", image_url: { url: image.dataUrl } });
+      result.push({ role: message.role, content });
+    } else {
+      result.push({ role: message.role, content: text });
+    }
   }
   return result;
+}
+
+function attachmentList(message, attachmentMap) {
+  const names = (message.attachments ?? []).map((id) => attachmentMap.get(id)?.name).filter(Boolean);
+  return names.length ? `\n\nAttachments: ${names.map((name) => `\`${name}\``).join(", ")}` : "";
+}
+
+export function conversationMarkdown(session) {
+  const attachmentMap = new Map((session.attachments ?? []).map((item) => [item.id, item]));
+  const lines = [`# ${session.title || "Conversation"}`, ""];
+  if (session.model) lines.push(`Model: \`${session.model}\``, "");
+  for (const message of session.messages ?? []) {
+    if (message.role === "tool") {
+      lines.push(`<details><summary>Tool · ${message.name || message.toolCallId || "result"}</summary>`, "", "```text", message.content, "```", "", "</details>", "");
+      continue;
+    }
+    lines.push(`## ${message.role[0].toUpperCase()}${message.role.slice(1)}`, "");
+    if (message.reasoning) lines.push("<details><summary>Reasoning</summary>", "", message.reasoning, "", "</details>", "");
+    lines.push(message.content || "", attachmentList(message, attachmentMap), "");
+  }
+  return `${lines.join("\n").replace(/\n{4,}/g, "\n\n\n").trim()}\n`;
 }

@@ -43,3 +43,46 @@ test("chat completion combines content, reasoning, finish reason, and usage", as
   assert.equal(result.usage.total_tokens, 12);
   assert.equal(deltas.length, 2);
 });
+
+test("streamed tool-call fragments become one OpenAI tool call", async () => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const payload of [
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-7", type: "function", function: { name: "web_", arguments: '{"query":' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: "search", arguments: '"local models"}' } }] } }] },
+        { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+      ]) controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+  const result = await streamChatCompletion("http://localhost:8000/v1", {
+    model: "local", messages: [{ role: "user", content: "search" }],
+  }, {
+    fetchImpl: async () => new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+  });
+  assert.deepEqual(result.toolCalls, [{
+    id: "call-7",
+    type: "function",
+    function: { name: "web_search", arguments: '{"query":"local models"}' },
+  }]);
+  assert.equal(result.finishReason, "tool_calls");
+});
+
+test("non-streamed JSON completions preserve tool calls", async () => {
+  const fetchImpl = async () => new Response(JSON.stringify({
+    id: "response-1",
+    model: "local",
+    choices: [{
+      message: {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "call-1", type: "function", function: { name: "ocr_attachment", arguments: { attachment: "photo.png" } } }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  const result = await streamChatCompletion("http://localhost:8000/v1", { model: "local", messages: [] }, { fetchImpl });
+  assert.equal(result.toolCalls[0].function.arguments, '{"attachment":"photo.png"}');
+});

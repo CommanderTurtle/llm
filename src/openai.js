@@ -161,9 +161,40 @@ function applyChunk(chunk, aggregate, onDelta) {
 
   if (content) aggregate.content += content;
   if (reasoning) aggregate.reasoning += reasoning;
+  let toolChanged = false;
+  const completeToolCalls = Array.isArray(choice.message?.tool_calls) ? choice.message.tool_calls : null;
+  if (completeToolCalls) {
+    aggregate.toolCalls = completeToolCalls.map((call, index) => ({
+      id: call?.id || `call_${index}`,
+      type: "function",
+      function: {
+        name: call?.function?.name || "",
+        arguments: typeof call?.function?.arguments === "string"
+          ? call.function.arguments
+          : JSON.stringify(call?.function?.arguments ?? {}),
+      },
+    }));
+    toolChanged = aggregate.toolCalls.length > 0;
+  } else if (Array.isArray(delta.tool_calls)) {
+    for (const [fallbackIndex, part] of delta.tool_calls.entries()) {
+      const index = Number.isInteger(part?.index) ? part.index : fallbackIndex;
+      aggregate.toolCalls[index] ??= { id: "", type: "function", function: { name: "", arguments: "" } };
+      const target = aggregate.toolCalls[index];
+      if (part?.id) target.id = part.id;
+      if (part?.type) target.type = part.type;
+      if (part?.function?.name) target.function.name += part.function.name;
+      if (part?.function?.arguments) target.function.arguments += part.function.arguments;
+      toolChanged = true;
+    }
+  } else if (delta.function_call) {
+    aggregate.toolCalls[0] ??= { id: "call_legacy", type: "function", function: { name: "", arguments: "" } };
+    if (delta.function_call.name) aggregate.toolCalls[0].function.name += delta.function_call.name;
+    if (delta.function_call.arguments) aggregate.toolCalls[0].function.arguments += delta.function_call.arguments;
+    toolChanged = true;
+  }
   if (choice.finish_reason != null) aggregate.finishReason = choice.finish_reason;
 
-  if (content || reasoning) onDelta?.({ content, reasoning, aggregate: { ...aggregate } });
+  if (content || reasoning || toolChanged) onDelta?.({ content, reasoning, toolCalls: aggregate.toolCalls, aggregate: { ...aggregate } });
 }
 
 function parsePayload(value) {
@@ -207,6 +238,7 @@ export async function streamChatCompletion(endpoint, request, options = {}) {
     reasoning: "",
     finishReason: null,
     usage: null,
+    toolCalls: [],
   };
 
   const contentType = response.headers.get("content-type") ?? "";

@@ -7,7 +7,7 @@
     "dev": "bun scripts/dev-server.mjs",
     "test:browser": "bun scripts/browser-fixture.mjs",
     "test": "bun test",
-    "check": "bun test"
+    "check": "bun test && bun scripts/check.mjs"
   },
   "packageManager": "bun@1.4.0"
 }
