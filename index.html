@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="A persistent static browser harness for private-LAN OpenAI-compatible language models and tools." />
+    <title>llm.shel.sh</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./resources/markdown/github-dark.min.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="llm.shel.sh home">llm.shel.sh</a>
+      <button id="new-chat" type="button">+ New chat</button>
+      <button id="connect-local" class="primary" type="button">Connect</button>
+      <span id="connection-status" class="status" data-state="idle" role="status" aria-live="polite">Not connected</span>
+      <span class="topbar-spacer"></span>
+      <button id="export-markdown" type="button">Markdown</button>
+      <button id="copy-markdown" class="icon-button" type="button" title="Copy conversation Markdown · Ctrl+click to omit Firecrawl sections after section 1 (context reads stay complete)" aria-label="Copy conversation Markdown; Ctrl+click for collapsed Firecrawl sections" hidden>⧉</button>
+      <button id="share-markdown" class="icon-button" type="button" title="Open conversation Markdown in a.shel.sh" aria-label="Open conversation Markdown in a.shel.sh" hidden>↗</button>
+      <button id="undo" class="icon-button" type="button" title="Undo last deleted turn" aria-label="Undo last deleted turn" disabled hidden>↶</button>
+      <button id="open-workspace" type="button" hidden>Workspace</button>
+      <button id="open-navigator" type="button" hidden>Timeline</button>
+      <button id="context-meter" class="context-meter" type="button" title="View context and compaction" aria-label="View context and compaction" hidden>
+        <span id="context-ring" class="context-ring"><span id="context-percent">0%</span></span>
+      </button>
+      <button id="print-chat" type="button">Save PDF</button>
+      <button id="import-state" type="button">Import state</button>
+      <button id="export-state" type="button">Save state</button>
+      <input id="import-file" type="file" accept="application/json,.json" hidden />
+    </header>
+
+    <div class="app-shell">
+      <aside class="sessions-panel" aria-label="Saved chat sessions">
+        <div class="panel-heading">
+          <h2>Chats</h2>
+          <span id="session-count" class="hint">1</span>
+        </div>
+        <div id="sessions" class="session-list"></div>
+        <div class="session-actions">
+          <button id="rename-chat" type="button">Rename</button>
+          <button id="delete-chat" class="danger" type="button">Delete</button>
+        </div>
+        <p id="storage-status" class="storage-note">Loading browser storage…</p>
+      </aside>
+
+      <main class="chat-panel">
+        <div id="messages" class="messages" aria-live="polite">
+          <div id="empty-state" class="empty-state">
+            <h1>Local agent harness</h1>
+            <p>Connect to a private OpenAI-compatible endpoint, attach local files, or enable browser tools. Chats resume after refresh.</p>
+          </div>
+        </div>
+
+        <form id="composer" class="composer">
+          <div id="pending-attachments" class="attachment-strip" aria-live="polite"></div>
+          <p id="attachment-status" class="hint attachment-status" hidden></p>
+          <label class="sr-only" for="prompt">Message</label>
+          <textarea id="prompt" rows="4" placeholder="Message the local model…"></textarea>
+          <div id="speech-strip" class="speech-strip" hidden><canvas id="speech-wave" aria-label="Microphone waveform"></canvas><span id="speech-status" role="status"></span><span id="speech-pending"></span></div>
+          <div class="composer-actions">
+            <button id="attach" type="button" aria-label="Attach files">+ Files</button>
+            <input id="attachment-files" type="file" multiple hidden />
+            <span id="conversation-stats" class="hint">0 messages</span>
+            <span id="tool-count" class="hint">1 browser tool</span>
+            <span class="topbar-spacer"></span>
+            <button id="microphone" type="button" class="microphone" aria-label="Start microphone" aria-pressed="false" disabled></button>
+            <button id="stop" type="button" disabled>Stop</button>
+            <button id="send" class="primary" type="submit">Send</button>
+          </div>
+        </form>
+      </main>
+
+      <aside class="settings" aria-label="Connection, generation, and tool settings">
+        <section>
+          <h2>Local model</h2>
+          <label for="endpoint">OpenAI-compatible base URL</label>
+          <input id="endpoint" type="url" value="http://localhost:8000/v1" spellcheck="false" autocomplete="off" />
+          <p class="hint">Localhost and private LAN only. The model path is normalized to <code>/v1</code>.</p>
+
+          <label for="model">Model</label>
+          <input id="model" type="text" list="model-options" placeholder="Connect to discover models" spellcheck="false" autocomplete="off" />
+          <datalist id="model-options"></datalist>
+          <p id="model-count" class="hint">No models discovered yet.</p>
+        </section>
+
+        <section>
+          <h2>Prompt</h2>
+          <label for="system-prompt">System prompt</label>
+          <textarea id="system-prompt" rows="5" placeholder="Optional system instructions"></textarea>
+        </section>
+
+        <details>
+          <summary>Generation settings</summary>
+          <div class="field-grid">
+            <label for="temperature">Temperature</label>
+            <input id="temperature" type="number" min="0" max="2" step="0.05" value="0.6" />
+
+            <label for="top-p">Top P</label>
+            <input id="top-p" type="number" min="0" max="1" step="0.01" value="0.95" />
+
+            <label for="max-tokens">Max tokens</label>
+            <input id="max-tokens" type="number" min="1" step="1" value="8192" />
+
+            <label id="context-window-label" for="context-window" hidden>Context window</label>
+            <input id="context-window" type="number" min="1" step="1" value="131072" hidden />
+
+            <label for="seed">Seed</label>
+            <input id="seed" type="number" step="1" placeholder="Random" />
+
+            <label for="reasoning-effort">Reasoning effort</label>
+            <select id="reasoning-effort">
+              <option value="">Endpoint default</option>
+              <option value="none">None</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">XHigh</option>
+            </select>
+          </div>
+          <label class="check-row"><input id="enable-thinking" type="checkbox" checked /> Pass <code>enable_thinking</code></label>
+        </details>
+
+        <details id="feature-matrix">
+          <summary>Feature matrix</summary>
+          <p class="hint">Every enhancement is opt-in. Drag across boxes to paint a choice; Shift-click selects every feature in the same group. With all boxes clear, requests and interaction match the last baseline release.</p>
+          <div class="feature-matrix">
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-stream-recovery" type="checkbox" /><span><strong>Interrupted-response recovery</strong><small>Recognize missing terminal signals or output limits and offer Continue on the latest assistant turn.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-auto-continue" type="checkbox" /><span><strong>Autocontinue</strong><small>Resume output limits or missing final answers through Continue. Stops on repeated empty/identical output, manual Stop, or three automatic retries.</small></span></label>
+            <label class="feature-row" data-feature-group="presentation"><input id="feature-advanced-lint" type="checkbox" /><span><strong>Advanced linting</strong><small>Local syntax parsers for 59 languages. Open a snippet with the model to discuss diagnostics and choose a replacement.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-auto-max-tokens" type="checkbox" /><span><strong>Server-decided output allowance</strong><small>Omit <code>max_tokens</code>; disabling restores the 8192 baseline.</small></span></label>
+            <label class="feature-row" data-feature-group="presentation"><input id="feature-rich-markdown" type="checkbox" /><span><strong>Rich Markdown</strong><small>Syntax highlighting, Mermaid, math, task lists, and inline diagnostics.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-parallel-sessions" type="checkbox" /><span><strong>Parallel chats</strong><small>Switch or create chats while other sessions continue generating, with no per-token session-list repaint.</small></span></label>
+            <label class="feature-row" data-feature-group="presentation"><input id="feature-markdown-actions" type="checkbox" /><span><strong>Complete Markdown export</strong><small>Copy, download, or open a rich transcript containing every original turn, reasoning block, tool call, and compaction record.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-vision-retry" type="checkbox" /><span><strong>Vision resize recovery</strong><small>Retry dimension ValueErrors in-browser, reducing the longest side by 128px each time.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-stable-scroll" type="checkbox" /><span><strong>Stable streaming scroll</strong><small>Follow only near the bottom; preserve the reasoning node, disclosure, and nested scroll position.</small></span></label>
+            <label class="feature-row" data-feature-group="context"><input id="feature-context-meter" type="checkbox" /><span><strong>Context meter</strong><small>Show per-chat token estimates and the circular context gauge.</small></span></label>
+            <label class="feature-row" data-feature-group="context"><input id="feature-compaction" type="checkbox" /><span><strong>Composable context controls</strong><small>Stack lossless Soft collapses and selected Normal summaries without reopening earlier groups.</small></span></label>
+            <label class="feature-row" data-feature-group="tools"><input id="feature-image-reads" type="checkbox" /><span><strong>Scraped image reads</strong><small>Expose source-bound <code>view_image</code> for images discovered in earlier Firecrawl results.</small></span></label>
+            <label class="feature-row" data-feature-group="tools"><input id="read-tools-enabled" type="checkbox" /><span><strong>Browser read tools</strong><small>Let the model reopen exact context, reasoning, instructions, and documents.</small></span></label>
+            <label class="feature-row" data-feature-group="tools"><input id="write-tools-enabled" type="checkbox" /><span><strong>Document write tools</strong><small>Store a formal response ending in DONE directly, or make precise hashline edits after reading.</small></span></label>
+            <label class="feature-row" data-feature-group="tools"><input id="todo-tools-enabled" type="checkbox" /><span><strong>TODO tool</strong><small>Expose the per-chat checklist, including one-click cleanup that keeps the latest item.</small></span></label>
+            <label class="feature-row" data-feature-group="editing"><input id="feature-undo-delete" type="checkbox" /><span><strong>Undo deleted turns</strong><small>Keep a short browser-local undo stack for transcript deletions.</small></span></label>
+            <label class="feature-row" data-feature-group="editing"><input id="feature-turn-controls" type="checkbox" /><span><strong>Advanced turn controls</strong><small>Copy/edit reasoning and edit or remove individual malformed tool requests without deleting their assistant turn.</small></span></label>
+            <label class="feature-row" data-feature-group="presentation"><input id="feature-transcript-navigator" type="checkbox" /><span><strong>Timeline + search</strong><small>Open a color-coded jump bar and fuzzy transcript search; quote a phrase for exact matching.</small></span></label>
+          </div>
+          <div class="matrix-actions">
+            <button id="feature-enable-all" type="button">Enable all</button>
+            <button id="feature-disable-all" type="button">Clear all</button>
+            <label class="read-gate"><input id="force-read" type="checkbox" /> gate edits with a forced read</label>
+          </div>
+        </details>
+
+        <details id="tools-settings" open>
+          <summary>Browser tools</summary>
+          <label for="tool-approval">Tool approval</label>
+          <select id="tool-approval">
+            <option value="ask">Ask before every call</option>
+            <option value="always">Allow enabled tools</option>
+          </select>
+
+          <label for="max-tool-rounds">Maximum tool rounds</label>
+          <input id="max-tool-rounds" type="number" min="1" max="16" step="1" value="8" />
+
+          <fieldset id="ocr-control" class="ocr-control" aria-describedby="ocr-hint">
+            <legend>Local image OCR</legend>
+            <div class="ocr-dial">
+              <input id="ocr-v1" type="radio" name="ocr-mode" value="v1" aria-label="Tesseract" autocomplete="off" checked />
+              <label for="ocr-v1" title="tesseract">v1</label>
+              <input id="ocr-v2" type="radio" name="ocr-mode" value="v2" aria-label="PPOCR" autocomplete="off" />
+              <label for="ocr-v2" title="ppocr">v2</label>
+              <input id="ocr-off" type="radio" name="ocr-mode" value="off" aria-label="OCR off" autocomplete="off" />
+              <label for="ocr-off" title="No OCR tool">off</label>
+              <span class="ocr-dial-thumb" aria-hidden="true"></span>
+            </div>
+          </fieldset>
+          <p id="ocr-hint" class="hint">Bundled OCR runs locally and loads only when called.</p>
+          <fieldset class="ocr-control" aria-describedby="stt-hint">
+            <legend>Local speech input</legend>
+            <div class="ocr-dial">
+              <input id="stt-v1" type="radio" name="stt-mode" value="v1" aria-label="Underdog Bark" autocomplete="off" />
+              <label for="stt-v1" title="Underdog Bark">v1</label>
+              <input id="stt-v2" type="radio" name="stt-mode" value="v2" aria-label="Cactus Whistle" autocomplete="off" />
+              <label for="stt-v2" title="Cactus Whistle">v2</label>
+              <input id="stt-off" type="radio" name="stt-mode" value="off" aria-label="Speech input off" autocomplete="off" checked />
+              <label for="stt-off" title="Speech input off">off</label>
+              <span class="ocr-dial-thumb" aria-hidden="true"></span>
+            </div>
+          </fieldset>
+          <p id="stt-hint" class="hint">Microphone stays local. Models load on first use: Bark 685 MB, English; Whistle 17 MB, seven languages.</p>
+          <label for="stt-bark">Bark variant</label>
+          <select id="stt-bark" disabled><option value="bark">Base</option><option value="bark-plus">Plus</option><option value="bark-clean">Clean</option></select>
+          <label for="stt-language">Whistle language</label>
+          <select id="stt-language" disabled><option value="">Detect</option><option value="en">English</option><option value="de">German</option><option value="fr">French</option><option value="es">Spanish</option><option value="it">Italian</option><option value="nl">Dutch</option><option value="pl">Polish</option></select>
+
+          <div class="tool-group">
+            <label class="check-row"><input id="firecrawl-enabled" type="checkbox" /> Firecrawl search + scrape</label>
+            <label for="firecrawl-url">Firecrawl URL</label>
+            <input id="firecrawl-url" type="url" value="http://localhost:3002" spellcheck="false" />
+            <div class="inline-fields">
+              <input id="firecrawl-limit" type="number" min="1" max="10" value="5" aria-label="Default Firecrawl result count" />
+              <button id="test-firecrawl" type="button">Test</button>
+            </div>
+            <p id="firecrawl-status" class="hint">Disabled.</p>
+          </div>
+
+          <div class="tool-group">
+            <h3>MCP Streamable HTTP</h3>
+            <label for="mcp-name">Name</label>
+            <input id="mcp-name" type="text" placeholder="Firebending bridge" />
+            <label for="mcp-url">Local MCP URL</label>
+            <input id="mcp-url" type="url" placeholder="http://localhost:3001/mcp" spellcheck="false" />
+            <button id="add-mcp" type="button">Add and discover</button>
+            <div id="mcp-list" class="mcp-list"></div>
+          </div>
+        </details>
+
+        <details id="connection-help">
+          <summary>Connection help</summary>
+          <p>Connect directly fetches <code>/v1/models</code> with the destination labeled <code>loopback</code> or <code>local</code>. On a public HTTPS page, that is the browser's permission trigger. A page already served from localhost normally does not need a prompt.</p>
+          <p><code>ERR_BLOCKED_BY_CLIENT</code> means the request stopped inside the browser. Allow Local network access in this site's permissions and check content-blocking extensions. Modern Chromium can relax HTTPS-to-HTTP local mixed-content blocking after permission is granted; browsers without that support require an HTTPS endpoint or the locally served page.</p>
+          <p id="connection-detail">No request has been made.</p>
+        </details>
+
+        <p class="storage-note"><strong>Local-first:</strong> chats and attachments are stored in this browser's IndexedDB. Importing state never contacts a service. <a href="https://github.com/CommanderTurtle/llm" target="_blank" rel="noopener noreferrer">Source</a></p>
+      </aside>
+    </div>
+
+    <dialog id="edit-dialog">
+      <form method="dialog" class="dialog-card">
+        <h2 id="edit-dialog-title">Edit transcript message</h2>
+        <p id="edit-dialog-hint" class="hint">The edited text becomes the exact context sent on future turns.</p>
+        <textarea id="edit-content" rows="14"></textarea>
+        <div class="dialog-actions">
+          <button value="cancel">Cancel</button>
+          <button id="save-edit" class="primary" value="default">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="tool-dialog">
+      <form method="dialog" class="dialog-card">
+        <h2>Allow local tool call?</h2>
+        <p id="tool-dialog-name" class="tool-call-name"></p>
+        <div id="tool-dialog-context" class="tool-approval-context" hidden></div>
+        <pre id="tool-dialog-arguments"></pre>
+        <div class="dialog-actions">
+          <button value="deny">Deny</button>
+          <button class="primary" value="allow">Allow</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="context-dialog" class="wide-dialog">
+      <div class="dialog-card">
+        <h2>Context</h2>
+        <p id="context-detail" class="hint"></p>
+        <div id="context-timeline" class="context-timeline" aria-label="Conversation timeline"></div>
+        <section id="transcript-search-section" class="transcript-search" hidden>
+          <label for="transcript-search">Search this transcript</label>
+          <input id="transcript-search" type="search" placeholder="Fuzzy words, or “an exact phrase”" autocomplete="off" />
+          <div id="transcript-search-results" class="transcript-search-results" aria-live="polite"></div>
+        </section>
+        <div id="compaction-controls">
+          <div class="context-actions">
+            <span class="context-action">
+              <button id="compact-soft" type="button">Soft · index Firecrawl</button>
+              <label class="context-auto" title="On the first context-limit error, run this Soft action and Continue."><input id="auto-compact-soft" type="checkbox" /> Auto</label>
+            </span>
+            <span class="context-action">
+              <button id="compact-context-reads" type="button">Soft · collapse context reads</button>
+              <label class="context-auto" title="On the first context-limit error, run this Soft action and Continue."><input id="auto-compact-context-reads" type="checkbox" /> Auto</label>
+            </span>
+            <button id="compact-normal" class="primary" type="button">Normal · summarize selected</button>
+            <button id="restore-context" type="button">Restore originals</button>
+          </div>
+          <label for="compaction-prompt">Stateless summarizer prompt</label>
+          <textarea id="compaction-prompt" rows="5"></textarea>
+        </div>
+          <div class="panel-heading compact-heading">
+            <h3>Select exact entries</h3>
+            <button id="delete-selected-context" class="danger icon-action" type="button" title="delete selected" aria-label="delete selected"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg></button>
+            <button id="compact-selected-context" class="icon-action" type="button" title="soft compact selected" aria-label="soft compact selected"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v5h16V3M4 21v-5h16v5M8 4l4 4 4-4M8 20l4-4 4 4M4 12h16" /></svg></button>
+            <button id="select-older-context" type="button">Select older</button>
+            <button id="clear-context-selection" type="button">Clear selection</button>
+          </div>
+          <p class="hint">Drag across boxes to paint a selection. Shift-click selects every available entry of the same role or tool type.</p>
+          <div id="compaction-messages" class="compaction-list"></div>
+          <div id="active-compaction" class="active-compaction"></div>
+        <div class="dialog-actions">
+          <button id="close-context" type="button">Close</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="workspace-dialog" class="wide-dialog">
+      <div class="dialog-card">
+        <div class="dialog-title-row">
+          <div>
+            <h2>Browser workspace</h2>
+            <p class="hint">TODOs, instructions, documents, and every revision live only in this saved chat.</p>
+          </div>
+          <button id="close-workspace" type="button" aria-label="Close workspace">×</button>
+        </div>
+        <section id="todo-workspace-section" class="workspace-section">
+          <div class="workspace-section-heading">
+            <h3>TODO</h3>
+            <button id="clear-todos-except-recent" type="button">Clear all but recent</button>
+          </div>
+          <div id="todo-list" class="todo-list"></div>
+          <div class="workspace-add-row">
+            <input id="todo-input" type="text" placeholder="Add a task" />
+            <button id="add-todo" type="button">Add</button>
+          </div>
+        </section>
+        <section id="document-workspace-section" class="workspace-section">
+          <div class="document-toolbar">
+            <select id="document-select" aria-label="Document"></select>
+            <button id="new-document" type="button">New</button>
+            <button id="open-instructions" type="button">Instructions</button>
+            <select id="document-revision" aria-label="Revision"></select>
+          </div>
+          <div class="document-fields">
+            <input id="document-name" type="text" placeholder="document.md" />
+            <input id="document-language" type="text" placeholder="markdown" />
+          </div>
+          <textarea id="document-content" class="document-editor" rows="16" spellcheck="false" placeholder="A model can create a document with put_document, or you can write one here."></textarea>
+          <div class="document-actions">
+            <span id="document-diagnostics" class="hint"></span>
+            <span class="topbar-spacer"></span>
+            <button id="save-document" class="primary" type="button">Save revision</button>
+            <button id="model-document" type="button">Open with the model</button>
+          </div>
+          <details id="document-diff-details">
+            <summary>Revision diff</summary>
+            <div id="document-diff" class="diff-view"></div>
+          </details>
+          <div id="document-preview" class="document-preview message-body"></div>
+        </section>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>

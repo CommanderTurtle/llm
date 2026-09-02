@@ -1,0 +1,13 @@
+{
+  "name": "llm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun scripts/dev-server.mjs",
+    "test:browser": "bun scripts/browser-fixture.mjs",
+    "test": "bun test",
+    "check": "bun test"
+  },
+  "packageManager": "bun@1.4.0"
+}
