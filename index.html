@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="A static, ephemeral browser harness for local OpenAI-compatible language models." />
+    <title>llm.shel.sh</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="llm.shel.sh home">llm.shel.sh</a>
+      <button id="connect-local" class="primary" type="button">Connect to local model</button>
+      <span id="connection-status" class="status" data-state="idle" role="status" aria-live="polite">Not connected</span>
+      <span class="topbar-spacer"></span>
+      <button id="import-chat" type="button">Import JSON</button>
+      <button id="export-chat" type="button">Export JSON</button>
+      <button id="clear-chat" type="button">Clear</button>
+      <input id="import-file" type="file" accept="application/json,.json" hidden />
+    </header>
+
+    <div class="app-shell">
+      <aside class="settings" aria-label="Connection and generation settings">
+        <section>
+          <h2>Local endpoint</h2>
+          <label for="endpoint">OpenAI-compatible base URL</label>
+          <input id="endpoint" type="url" value="http://localhost:8000/v1" spellcheck="false" autocomplete="off" />
+          <p class="hint">Localhost and private LAN addresses only. The path is normalized to <code>/v1</code>.</p>
+
+          <label for="model">Model</label>
+          <input id="model" type="text" list="model-options" placeholder="Connect to discover models" spellcheck="false" autocomplete="off" />
+          <datalist id="model-options"></datalist>
+          <p id="model-count" class="hint">No models discovered yet.</p>
+        </section>
+
+        <section>
+          <h2>Prompt</h2>
+          <label for="system-prompt">System prompt</label>
+          <textarea id="system-prompt" rows="5" placeholder="Optional system instructions"></textarea>
+        </section>
+
+        <details>
+          <summary>Generation settings</summary>
+          <div class="field-grid">
+            <label for="temperature">Temperature</label>
+            <input id="temperature" type="number" min="0" max="2" step="0.05" value="0.6" />
+
+            <label for="top-p">Top P</label>
+            <input id="top-p" type="number" min="0" max="1" step="0.01" value="0.95" />
+
+            <label for="max-tokens">Max tokens</label>
+            <input id="max-tokens" type="number" min="1" step="1" value="8192" />
+
+            <label for="seed">Seed</label>
+            <input id="seed" type="number" step="1" placeholder="Random" />
+          </div>
+        </details>
+
+        <details id="connection-help">
+          <summary>Connection help</summary>
+          <p>This page makes a normal browser request to your machine. Approve the browser's local-network prompt if it appears.</p>
+          <p id="connection-detail">No request has been made.</p>
+        </details>
+
+        <p class="ephemeral-note"><strong>Ephemeral:</strong> nothing is stored by this page. Refreshing clears the conversation. Export it first if you want to keep it.</p>
+      </aside>
+
+      <main class="chat-panel">
+        <div id="messages" class="messages" aria-live="polite">
+          <div id="empty-state" class="empty-state">
+            <h1>Local LLM chat</h1>
+            <p>Start your local OpenAI-compatible server, connect, choose the discovered model, and send a message.</p>
+          </div>
+        </div>
+
+        <form id="composer" class="composer">
+          <label class="sr-only" for="prompt">Message</label>
+          <textarea id="prompt" rows="4" placeholder="Message the local model…" required></textarea>
+          <div class="composer-actions">
+            <span id="conversation-stats" class="hint">0 messages</span>
+            <span class="topbar-spacer"></span>
+            <button id="stop" type="button" disabled>Stop</button>
+            <button id="send" class="primary" type="submit">Send</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
