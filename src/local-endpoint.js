@@ -70,9 +70,9 @@ function withDefaultProtocol(value) {
   return `http://${trimmed}`;
 }
 
-export function normalizeLocalEndpoint(input) {
+export function normalizeLocalServiceUrl(input, options = {}) {
   if (typeof input !== "string" || input.trim() === "") {
-    throw new LocalEndpointError("Enter a local OpenAI-compatible endpoint.", "EMPTY_ENDPOINT");
+    throw new LocalEndpointError(options.emptyMessage ?? "Enter a local service URL.", "EMPTY_ENDPOINT");
   }
 
   let parsed;
@@ -108,12 +108,27 @@ export function normalizeLocalEndpoint(input) {
   parsed.password = "";
   parsed.search = "";
   parsed.hash = "";
-  parsed.pathname = "/v1";
-  return parsed.toString().replace(/\/$/, "");
+  if (typeof options.forcePath === "string") parsed.pathname = options.forcePath;
+  else if ((!parsed.pathname || parsed.pathname === "/") && options.defaultPath) parsed.pathname = options.defaultPath;
+  const result = parsed.toString();
+  return options.keepTrailingSlash ? result : result.replace(/\/$/, "");
+}
+
+export function normalizeLocalEndpoint(input) {
+  return normalizeLocalServiceUrl(input, {
+    emptyMessage: "Enter a local OpenAI-compatible endpoint.",
+    forcePath: "/v1",
+  });
 }
 
 export function endpointResource(endpoint, resource) {
   const base = normalizeLocalEndpoint(endpoint);
+  const suffix = String(resource).replace(/^\/+/, "");
+  return `${base}/${suffix}`;
+}
+
+export function serviceResource(endpoint, resource) {
+  const base = normalizeLocalServiceUrl(endpoint);
   const suffix = String(resource).replace(/^\/+/, "");
   return `${base}/${suffix}`;
 }

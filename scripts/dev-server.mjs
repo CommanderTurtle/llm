@@ -9,11 +9,13 @@ const host = process.env.HOST ?? "127.0.0.1";
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
+  ".gz": "application/gzip",
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".map": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".wasm": "application/wasm",
 };
 
 const server = createServer((request, response) => {

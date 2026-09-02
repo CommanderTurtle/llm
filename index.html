@@ -4,29 +4,69 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="description" content="A static, ephemeral browser harness for local OpenAI-compatible language models." />
+    <meta name="description" content="A persistent static browser harness for private-LAN OpenAI-compatible language models and tools." />
     <title>llm.shel.sh</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <header class="topbar">
       <a class="brand" href="./" aria-label="llm.shel.sh home">llm.shel.sh</a>
-      <button id="connect-local" class="primary" type="button">Connect to local model</button>
+      <button id="new-chat" type="button">+ New chat</button>
+      <button id="connect-local" class="primary" type="button">Connect</button>
       <span id="connection-status" class="status" data-state="idle" role="status" aria-live="polite">Not connected</span>
       <span class="topbar-spacer"></span>
-      <button id="import-chat" type="button">Import JSON</button>
-      <button id="export-chat" type="button">Export JSON</button>
-      <button id="clear-chat" type="button">Clear</button>
+      <button id="export-markdown" type="button">Markdown</button>
+      <button id="print-chat" type="button">Save PDF</button>
+      <button id="import-state" type="button">Import state</button>
+      <button id="export-state" type="button">Save state</button>
       <input id="import-file" type="file" accept="application/json,.json" hidden />
     </header>
 
     <div class="app-shell">
-      <aside class="settings" aria-label="Connection and generation settings">
+      <aside class="sessions-panel" aria-label="Saved chat sessions">
+        <div class="panel-heading">
+          <h2>Chats</h2>
+          <span id="session-count" class="hint">1</span>
+        </div>
+        <div id="sessions" class="session-list"></div>
+        <div class="session-actions">
+          <button id="rename-chat" type="button">Rename</button>
+          <button id="delete-chat" class="danger" type="button">Delete</button>
+        </div>
+        <p id="storage-status" class="storage-note">Loading browser storage…</p>
+      </aside>
+
+      <main class="chat-panel">
+        <div id="messages" class="messages" aria-live="polite">
+          <div id="empty-state" class="empty-state">
+            <h1>Local agent harness</h1>
+            <p>Connect to a private OpenAI-compatible endpoint, attach local files, or enable browser tools. Chats resume after refresh.</p>
+          </div>
+        </div>
+
+        <form id="composer" class="composer">
+          <div id="pending-attachments" class="attachment-strip" aria-live="polite"></div>
+          <p id="attachment-status" class="hint attachment-status" hidden></p>
+          <label class="sr-only" for="prompt">Message</label>
+          <textarea id="prompt" rows="4" placeholder="Message the local model…"></textarea>
+          <div class="composer-actions">
+            <button id="attach" type="button" aria-label="Attach files">+ Files</button>
+            <input id="attachment-files" type="file" multiple hidden />
+            <span id="conversation-stats" class="hint">0 messages</span>
+            <span id="tool-count" class="hint">1 browser tool</span>
+            <span class="topbar-spacer"></span>
+            <button id="stop" type="button" disabled>Stop</button>
+            <button id="send" class="primary" type="submit">Send</button>
+          </div>
+        </form>
+      </main>
+
+      <aside class="settings" aria-label="Connection, generation, and tool settings">
         <section>
-          <h2>Local endpoint</h2>
+          <h2>Local model</h2>
           <label for="endpoint">OpenAI-compatible base URL</label>
           <input id="endpoint" type="url" value="http://localhost:8000/v1" spellcheck="false" autocomplete="off" />
-          <p class="hint">Localhost and private LAN addresses only. The path is normalized to <code>/v1</code>.</p>
+          <p class="hint">Localhost and private LAN only. The model path is normalized to <code>/v1</code>.</p>
 
           <label for="model">Model</label>
           <input id="model" type="text" list="model-options" placeholder="Connect to discover models" spellcheck="false" autocomplete="off" />
@@ -54,38 +94,90 @@
 
             <label for="seed">Seed</label>
             <input id="seed" type="number" step="1" placeholder="Random" />
+
+            <label for="reasoning-effort">Reasoning effort</label>
+            <select id="reasoning-effort">
+              <option value="">Endpoint default</option>
+              <option value="none">None</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">XHigh</option>
+            </select>
+          </div>
+          <label class="check-row"><input id="enable-thinking" type="checkbox" checked /> Pass <code>enable_thinking</code></label>
+        </details>
+
+        <details id="tools-settings" open>
+          <summary>Browser tools</summary>
+          <label for="tool-approval">Tool approval</label>
+          <select id="tool-approval">
+            <option value="ask">Ask before every call</option>
+            <option value="always">Allow enabled tools</option>
+          </select>
+
+          <label for="max-tool-rounds">Maximum tool rounds</label>
+          <input id="max-tool-rounds" type="number" min="1" max="16" step="1" value="8" />
+
+          <label class="check-row"><input id="ocr-enabled" type="checkbox" checked /> Local image OCR</label>
+          <p class="hint">Tesseract worker, core, and English data are bundled locally and load only when called.</p>
+
+          <div class="tool-group">
+            <label class="check-row"><input id="firecrawl-enabled" type="checkbox" /> Firecrawl search + scrape</label>
+            <label for="firecrawl-url">Firecrawl URL</label>
+            <input id="firecrawl-url" type="url" value="http://localhost:3002" spellcheck="false" />
+            <div class="inline-fields">
+              <input id="firecrawl-limit" type="number" min="1" max="10" value="5" aria-label="Default Firecrawl result count" />
+              <button id="test-firecrawl" type="button">Test</button>
+            </div>
+            <p id="firecrawl-status" class="hint">Disabled.</p>
+          </div>
+
+          <div class="tool-group">
+            <h3>MCP Streamable HTTP</h3>
+            <label for="mcp-name">Name</label>
+            <input id="mcp-name" type="text" placeholder="Firebending bridge" />
+            <label for="mcp-url">Local MCP URL</label>
+            <input id="mcp-url" type="url" placeholder="http://localhost:3001/mcp" spellcheck="false" />
+            <button id="add-mcp" type="button">Add and discover</button>
+            <div id="mcp-list" class="mcp-list"></div>
           </div>
         </details>
 
         <details id="connection-help">
           <summary>Connection help</summary>
-          <p>This page makes a normal browser request to your machine. Approve the browser's local-network prompt if it appears.</p>
+          <p>This static page makes normal browser requests to your machine. Approve the browser's local-network prompt if it appears.</p>
           <p id="connection-detail">No request has been made.</p>
         </details>
 
-        <p class="ephemeral-note"><strong>Ephemeral:</strong> nothing is stored by this page. Refreshing clears the conversation. Export it first if you want to keep it.</p>
+        <p class="storage-note"><strong>Local-first:</strong> chats and attachments are stored in this browser's IndexedDB. Importing state never contacts a service.</p>
       </aside>
-
-      <main class="chat-panel">
-        <div id="messages" class="messages" aria-live="polite">
-          <div id="empty-state" class="empty-state">
-            <h1>Local LLM chat</h1>
-            <p>Start your local OpenAI-compatible server, connect, choose the discovered model, and send a message.</p>
-          </div>
-        </div>
-
-        <form id="composer" class="composer">
-          <label class="sr-only" for="prompt">Message</label>
-          <textarea id="prompt" rows="4" placeholder="Message the local model…" required></textarea>
-          <div class="composer-actions">
-            <span id="conversation-stats" class="hint">0 messages</span>
-            <span class="topbar-spacer"></span>
-            <button id="stop" type="button" disabled>Stop</button>
-            <button id="send" class="primary" type="submit">Send</button>
-          </div>
-        </form>
-      </main>
     </div>
+
+    <dialog id="edit-dialog">
+      <form method="dialog" class="dialog-card">
+        <h2>Edit transcript message</h2>
+        <p class="hint">The edited text becomes the exact context sent on future turns.</p>
+        <textarea id="edit-content" rows="14"></textarea>
+        <div class="dialog-actions">
+          <button value="cancel">Cancel</button>
+          <button id="save-edit" class="primary" value="default">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="tool-dialog">
+      <form method="dialog" class="dialog-card">
+        <h2>Allow local tool call?</h2>
+        <p id="tool-dialog-name" class="tool-call-name"></p>
+        <pre id="tool-dialog-arguments"></pre>
+        <div class="dialog-actions">
+          <button value="deny">Deny</button>
+          <button class="primary" value="allow">Allow</button>
+        </div>
+      </form>
+    </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script type="module" src="./src/app.js"></script>
