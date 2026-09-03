@@ -1,6 +1,12 @@
 import { formatAttachmentSize, prepareAttachment } from "./attachments.js";
 import { testFirecrawl } from "./firecrawl.js";
-import { endpointResource, normalizeLocalEndpoint } from "./local-endpoint.js";
+import {
+  endpointResource,
+  localNetworkPermissionNameForEndpoint,
+  localNetworkPermissionState,
+  normalizeLocalEndpoint,
+  targetAddressSpaceForEndpoint,
+} from "./local-endpoint.js";
 import { copyText, renderMarkdown } from "./markdown.js";
 import { McpHttpClient } from "./mcp.js";
 import { discoverModels, OpenAIEndpointError, streamChatCompletion } from "./openai.js";
@@ -209,19 +215,28 @@ function populateModels(models) {
   if (models.length && !models.includes(elements.model.value.trim())) elements.model.value = models[0];
 }
 
-function connectionMessage(error) {
+async function connectionMessage(error) {
   const message = error instanceof Error ? error.message : String(error);
-  let suffix = "";
+  const notes = [];
   try {
     const endpoint = normalizeLocalEndpoint(elements.endpoint.value);
     const parsed = new URL(endpoint);
+    const permissionName = localNetworkPermissionNameForEndpoint(endpoint);
+    const permission = await localNetworkPermissionState(endpoint);
+    if (permission === "denied") {
+      notes.push(`The browser reports ${permissionName} is denied for this site; change Local network access to Allow in site permissions, then reload.`);
+    } else if (permission === "prompt" && error instanceof OpenAIEndpointError && error.code === "NETWORK_ERROR") {
+      notes.push(`The browser still reports ${permissionName} as prompt. Connect already made the permission-triggering fetch; if no prompt appeared, an extension, browser policy, or unreachable endpoint stopped it first.`);
+    } else if (error instanceof OpenAIEndpointError && error.code === "NETWORK_ERROR") {
+      notes.push("If DevTools reports ERR_BLOCKED_BY_CLIENT, check this site's Local network access permission and any content-blocking extension.");
+    }
     if (location.protocol === "https:" && parsed.protocol === "http:" && parsed.hostname !== "localhost") {
-      suffix = " This browser may require an HTTPS LAN endpoint because the page itself is HTTPS.";
+      notes.push("This is an HTTPS page calling a plain-HTTP LAN address. Supporting browsers relax mixed-content blocking after local-network permission is granted; otherwise use an HTTPS local endpoint or the locally served page.");
     }
   } catch {
     // Preserve the original validation error.
   }
-  return `${message}${suffix}`;
+  return [message, ...notes].join(" ");
 }
 
 async function connect() {
@@ -230,12 +245,14 @@ async function connect() {
   try {
     const endpoint = normalizeLocalEndpoint(elements.endpoint.value);
     const modelsUrl = endpointResource(endpoint, "models");
+    const addressSpace = targetAddressSpaceForEndpoint(endpoint);
+    const permissionName = localNetworkPermissionNameForEndpoint(endpoint);
     elements.endpoint.value = endpoint;
     session().endpoint = endpoint;
     const promptNote = location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.hostname === "[::1]"
       ? " A loopback-hosted dev page normally does not need to show a local-network permission prompt."
-      : " Approve local-network access if the browser prompts.";
-    setConnection("connecting", "Requesting local access…", `GET ${modelsUrl}.${promptNote}`);
+      : ` This click directly starts the browser's ${permissionName} request; approve it if prompted.`;
+    setConnection("connecting", "Requesting local access…", `GET ${modelsUrl} with targetAddressSpace=${addressSpace}.${promptNote}`);
     const models = await discoverModels(endpoint);
     state.models = models;
     state.connected = true;
@@ -243,11 +260,13 @@ async function connect() {
     session().model = elements.model.value.trim();
     touchSession(session());
     queueSave();
-    setConnection("connected", models.length ? `Connected · ${models.length} models` : "Connected", `Connected to ${endpoint}.`);
+    const permission = await localNetworkPermissionState(endpoint);
+    const permissionDetail = permission === "unsupported" ? "" : ` Browser permission: ${permissionName}=${permission}.`;
+    setConnection("connected", models.length ? `Connected · ${models.length} models` : "Connected", `Connected to ${endpoint}.${permissionDetail}`);
   } catch (error) {
     state.connected = false;
     populateModels([]);
-    setConnection("error", "Connection failed", connectionMessage(error));
+    setConnection("error", "Connection failed", await connectionMessage(error));
     elements.help.open = true;
   } finally {
     elements.connect.disabled = false;
@@ -709,7 +728,7 @@ async function runAssistantLoop(current, endpoint, model, controller) {
         setConnection(state.connected ? "connected" : "idle", state.connected ? "Connected" : "Not connected");
       } else {
         currentAssistant.state = "error";
-        currentAssistant.error = connectionMessage(error);
+        currentAssistant.error = await connectionMessage(error);
         state.connected = false;
         setConnection("error", "Request failed", currentAssistant.error);
         if (error instanceof OpenAIEndpointError && error.code === "NETWORK_ERROR") elements.help.open = true;
@@ -780,7 +799,7 @@ async function send(event) {
   let endpoint;
   try { endpoint = normalizeLocalEndpoint(current.endpoint); }
   catch (error) {
-    setConnection("error", "Invalid endpoint", connectionMessage(error));
+    setConnection("error", "Invalid endpoint", await connectionMessage(error));
     elements.help.open = true;
     return;
   }

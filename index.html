@@ -147,7 +147,8 @@
 
         <details id="connection-help">
           <summary>Connection help</summary>
-          <p>This static page explicitly labels requests as loopback or private-LAN traffic. Approve the browser's local-network prompt if it appears; a page served from localhost normally will not need to show one.</p>
+          <p>Connect directly fetches <code>/v1/models</code> with the destination labeled <code>loopback</code> or <code>local</code>. On a public HTTPS page, that is the browser's permission trigger. A page already served from localhost normally does not need a prompt.</p>
+          <p><code>ERR_BLOCKED_BY_CLIENT</code> means the request stopped inside the browser. Allow Local network access in this site's permissions and check content-blocking extensions. Modern Chromium can relax HTTPS-to-HTTP local mixed-content blocking after permission is granted; browsers without that support require an HTTPS endpoint or the locally served page.</p>
           <p id="connection-detail">No request has been made.</p>
         </details>
 

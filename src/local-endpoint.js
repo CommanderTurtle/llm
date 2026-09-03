@@ -95,6 +95,12 @@ export function targetAddressSpaceForEndpoint(input) {
   return isLoopbackHostname(parsed.hostname) ? "loopback" : "local";
 }
 
+export function localNetworkPermissionNameForEndpoint(input) {
+  return targetAddressSpaceForEndpoint(input) === "loopback"
+    ? "loopback-network"
+    : "local-network";
+}
+
 export function localFetchOptions(endpoint, options = {}) {
   return {
     ...options,
@@ -102,6 +108,20 @@ export function localFetchOptions(endpoint, options = {}) {
     credentials: options.credentials ?? "omit",
     targetAddressSpace: targetAddressSpaceForEndpoint(endpoint),
   };
+}
+
+export async function localNetworkPermissionState(endpoint, permissions = globalThis.navigator?.permissions) {
+  if (!permissions?.query) return "unsupported";
+  const permissionNames = [localNetworkPermissionNameForEndpoint(endpoint), "local-network-access"];
+  for (const name of permissionNames) {
+    try {
+      const status = await permissions.query({ name });
+      if (["granted", "denied", "prompt"].includes(status?.state)) return status.state;
+    } catch {
+      // Older Chromium builds only recognize the combined compatibility alias.
+    }
+  }
+  return "unsupported";
 }
 
 function withDefaultProtocol(value) {
