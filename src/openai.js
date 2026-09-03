@@ -1,4 +1,4 @@
-import { endpointResource, normalizeLocalEndpoint } from "./local-endpoint.js";
+import { endpointResource, localFetchOptions, normalizeLocalEndpoint } from "./local-endpoint.js";
 
 export class OpenAIEndpointError extends Error {
   constructor(message, options = {}) {
@@ -88,26 +88,56 @@ async function responseError(response) {
   });
 }
 
-function networkError(error, action) {
+function networkError(error, action, url) {
   if (error?.name === "AbortError") return error;
+  if (error?.name === "TimeoutError") {
+    return new OpenAIEndpointError(`Timed out while contacting ${url}. Confirm the address and that the model server is listening.`, {
+      code: "TIMEOUT",
+      cause: error,
+    });
+  }
   return new OpenAIEndpointError(
-    `The browser could not ${action} the local endpoint. Approve local-network access if prompted and confirm the model server is running.`,
+    `The browser could not ${action} ${url}. Approve local-network access if prompted and confirm the model server is running and permits this page's Origin.`,
     { code: "NETWORK_ERROR", cause: error },
   );
 }
 
+function boundedSignal(source, timeoutMs) {
+  const duration = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12_000;
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(source.reason);
+  if (source?.aborted) forwardAbort();
+  else source?.addEventListener("abort", forwardAbort, { once: true });
+
+  const timeout = setTimeout(() => {
+    controller.abort(new DOMException(`Request exceeded ${duration} ms.`, "TimeoutError"));
+  }, duration);
+
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timeout);
+      source?.removeEventListener("abort", forwardAbort);
+    },
+  };
+}
+
 export async function discoverModels(endpoint, options = {}) {
   const base = normalizeLocalEndpoint(endpoint);
+  const url = endpointResource(base, "models");
+  const bounded = boundedSignal(options.signal, options.timeoutMs);
   let response;
   try {
-    response = await (options.fetchImpl ?? fetch)(endpointResource(base, "models"), {
+    response = await (options.fetchImpl ?? fetch)(url, localFetchOptions(url, {
       method: "GET",
       headers: { Accept: "application/json" },
       cache: "no-store",
-      signal: options.signal,
-    });
+      signal: bounded.signal,
+    }));
   } catch (error) {
-    throw networkError(error, "reach");
+    throw networkError(error, "reach", url);
+  } finally {
+    bounded.clear();
   }
 
   if (!response.ok) throw await responseError(response);
@@ -212,10 +242,11 @@ function parsePayload(value) {
 export async function streamChatCompletion(endpoint, request, options = {}) {
   const base = normalizeLocalEndpoint(endpoint);
   const fetchImpl = options.fetchImpl ?? fetch;
+  const url = endpointResource(base, "chat/completions");
   let response;
 
   try {
-    response = await fetchImpl(endpointResource(base, "chat/completions"), {
+    response = await fetchImpl(url, localFetchOptions(url, {
       method: "POST",
       headers: {
         Accept: "text/event-stream, application/json",
@@ -224,9 +255,9 @@ export async function streamChatCompletion(endpoint, request, options = {}) {
       body: JSON.stringify({ ...request, stream: true }),
       cache: "no-store",
       signal: options.signal,
-    });
+    }));
   } catch (error) {
-    throw networkError(error, "send a request to");
+    throw networkError(error, "send a request to", url);
   }
 
   if (!response.ok) throw await responseError(response);

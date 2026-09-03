@@ -49,9 +49,25 @@ test("current stateless MCP discovers and calls browser-reachable tools", async 
   assert.equal(tools[0].name, "lookup");
   assert.equal(mcpResultText(result), "record:7");
   assert.equal(seen[0].headers.get("mcp-protocol-version"), MODERN_MCP_VERSION);
+  assert.equal(seen[0].request.method, "server/discover");
   assert.equal(seen[2].headers.get("mcp-name"), "lookup");
   assert.equal(seen[2].headers.get("mcp-param-region"), "us-west1");
   assert.equal(seen[2].request.params._meta["io.modelcontextprotocol/protocolVersion"], MODERN_MCP_VERSION);
+});
+
+test("MCP requests declare loopback access without browser credentials", async () => {
+  let init;
+  const client = new McpHttpClient("http://127.0.0.1:3001/mcp", {
+    fetchImpl: async (_url, value) => {
+      init = value;
+      const request = JSON.parse(value.body);
+      return jsonRpcResponse(request.id, { tools: [] });
+    },
+  });
+  await client.request("tools/list", {}, { modern: true });
+  assert.equal(init.targetAddressSpace, "loopback");
+  assert.equal(init.mode, "cors");
+  assert.equal(init.credentials, "omit");
 });
 
 test("current MCP works without optional discovery and encodes non-ASCII name headers", async () => {

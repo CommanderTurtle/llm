@@ -12,7 +12,7 @@ Run an unauthenticated OpenAI-compatible service such as vLLM, then serve this d
 bun run dev
 ```
 
-Open `http://127.0.0.1:4173/`, leave the default `http://localhost:8000/v1` or enter another private-LAN address, and click **Connect**. The harness requests `GET /v1/models`; a model id can also be typed manually. **Send** calls `POST /v1/chat/completions` with streaming enabled. `Ctrl+Enter` / `Cmd+Enter` sends and **Stop** aborts the active request.
+Open `http://127.0.0.1:4173/`, leave the default `http://localhost:8000/v1` or enter another private-LAN address, and click **Connect**. The harness shows the exact `GET /v1/models` target while connecting and stops that discovery attempt after 12 seconds rather than hanging indefinitely; a model id can also be typed manually. **Send** calls `POST /v1/chat/completions` with streaming enabled. `Ctrl+Enter` / `Cmd+Enter` sends and **Stop** aborts the active request.
 
 There is no install or build step. Publish the repository contents directly when deploying it as a static site.
 
@@ -79,7 +79,7 @@ Model, Firecrawl, and MCP fields accept only HTTP(S) destinations that resolve s
 
 Public hostnames, URL credentials, non-HTTP protocols, `0.0.0.0`, and `[::]` are rejected before `fetch`. Model URLs are canonicalized to `/v1`; service paths for Firecrawl and MCP are preserved.
 
-This policy is not a CORS bypass. Each local service must accept the page's `Origin`, respond to preflight requests, and permit the headers it receives. MCP commonly needs `Content-Type`, `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Session-Id`, and any schema-declared `Mcp-Param-*` headers, with `Mcp-Session-Id` exposed to browser JavaScript. Chromium may additionally send a Private Network Access preflight or display a local-network permission prompt. An HTTPS-hosted page may be unable to call a plain-HTTP LAN host; use an HTTPS local endpoint or serve the page locally when the browser enforces mixed-content restrictions.
+This policy is not a CORS bypass. Each local service must accept the page's `Origin`, respond to preflight requests, and permit the headers it receives. MCP commonly needs `Content-Type`, `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Session-Id`, and any schema-declared `Mcp-Param-*` headers, with `Mcp-Session-Id` exposed to browser JavaScript. Every model, Firecrawl, and MCP fetch explicitly declares its Chromium Local Network Access target as `loopback` or `local`; a public HTTPS deployment can therefore produce the local-network permission prompt deterministically. A dev page already served from loopback normally does not cross into a more-private address space, so the absence of a prompt there is expected. An HTTPS-hosted page may still be unable to call a plain-HTTP LAN host in browsers that enforce mixed-content rules without Local Network Access relaxation.
 
 MCP tools can be more privileged than this page. Approval controls whether the harness invokes them; the MCP server remains responsible for its own authorization, sandboxing, and effects.
 

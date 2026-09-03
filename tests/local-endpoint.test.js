@@ -4,10 +4,12 @@ import test from "node:test";
 import {
   endpointResource,
   isLocalHostname,
+  localFetchOptions,
   LocalEndpointError,
   normalizeLocalEndpoint,
   normalizeLocalServiceUrl,
   serviceResource,
+  targetAddressSpaceForEndpoint,
 } from "../src/local-endpoint.js";
 
 test("normalizes local endpoints to /v1", () => {
@@ -42,6 +44,25 @@ test("recognizes loopback and private address families", () => {
     assert.equal(isLocalHostname(host), true, host);
   }
 });
+
+test("labels loopback and private-LAN requests for browser Local Network Access", () => {
+  for (const endpoint of ["localhost:8000", "http://model.localhost:9000/v1", "http://127.7.8.9:8000", "http://[::1]:8000"]) {
+    assert.equal(targetAddressSpaceForEndpoint(endpoint), "loopback", endpoint);
+  }
+  for (const endpoint of ["http://192.168.1.50:8000", "http://10.2.3.4:8000", "http://workstation.local:8000", "http://host.docker.internal:8000"]) {
+    assert.equal(targetAddressSpaceForEndpoint(endpoint), "local", endpoint);
+  }
+
+  const signal = new AbortController().signal;
+  assert.deepEqual(localFetchOptions("http://localhost:8000/v1/models", { method: "GET", signal }), {
+    method: "GET",
+    signal,
+    mode: "cors",
+    credentials: "omit",
+    targetAddressSpace: "loopback",
+  });
+});
+
 test("rejects public, credential-bearing, and wildcard endpoints", () => {
   for (const endpoint of [
     "https://example.com/v1",

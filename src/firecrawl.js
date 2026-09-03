@@ -1,4 +1,4 @@
-import { normalizeLocalServiceUrl } from "./local-endpoint.js";
+import { localFetchOptions, normalizeLocalServiceUrl } from "./local-endpoint.js";
 
 export class FirecrawlError extends Error {
   constructor(message, options = {}) {
@@ -21,15 +21,16 @@ function resource(base, name) {
 }
 
 async function request(base, name, body, options = {}) {
+  const url = resource(base, name);
   let response;
   try {
-    response = await (options.fetchImpl ?? fetch)(resource(base, name), {
+    response = await (options.fetchImpl ?? fetch)(url, localFetchOptions(url, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify(body),
       cache: "no-store",
       signal: options.signal,
-    });
+    }));
   } catch (error) {
     throw new FirecrawlError("The browser could not reach the local Firecrawl service.", { cause: error });
   }

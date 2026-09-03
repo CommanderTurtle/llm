@@ -1,6 +1,6 @@
 import { formatAttachmentSize, prepareAttachment } from "./attachments.js";
 import { testFirecrawl } from "./firecrawl.js";
-import { normalizeLocalEndpoint } from "./local-endpoint.js";
+import { endpointResource, normalizeLocalEndpoint } from "./local-endpoint.js";
 import { copyText, renderMarkdown } from "./markdown.js";
 import { McpHttpClient } from "./mcp.js";
 import { discoverModels, OpenAIEndpointError, streamChatCompletion } from "./openai.js";
@@ -226,12 +226,16 @@ function connectionMessage(error) {
 
 async function connect() {
   if (state.request) return;
-  setConnection("connecting", "Requesting local access…", "Contacting the local /v1/models endpoint.");
   elements.connect.disabled = true;
   try {
     const endpoint = normalizeLocalEndpoint(elements.endpoint.value);
+    const modelsUrl = endpointResource(endpoint, "models");
     elements.endpoint.value = endpoint;
     session().endpoint = endpoint;
+    const promptNote = location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.hostname === "[::1]"
+      ? " A loopback-hosted dev page normally does not need to show a local-network permission prompt."
+      : " Approve local-network access if the browser prompts.";
+    setConnection("connecting", "Requesting local access…", `GET ${modelsUrl}.${promptNote}`);
     const models = await discoverModels(endpoint);
     state.models = models;
     state.connected = true;
