@@ -5,6 +5,8 @@ import {
   endpointResource,
   isLocalHostname,
   localFetchOptions,
+  localNetworkPermissionNameForEndpoint,
+  localNetworkPermissionState,
   LocalEndpointError,
   normalizeLocalEndpoint,
   normalizeLocalServiceUrl,
@@ -61,6 +63,27 @@ test("labels loopback and private-LAN requests for browser Local Network Access"
     credentials: "omit",
     targetAddressSpace: "loopback",
   });
+});
+
+test("reads Local Network Access permission when the browser exposes it", async () => {
+  assert.equal(localNetworkPermissionNameForEndpoint("http://localhost:8000/v1"), "loopback-network");
+  assert.equal(localNetworkPermissionNameForEndpoint("http://192.168.1.20:8000/v1"), "local-network");
+
+  const queried = [];
+  const permissions = { query: async ({ name }) => {
+    queried.push(name);
+    return { state: name === "loopback-network" ? "granted" : "denied" };
+  } };
+  assert.equal(await localNetworkPermissionState("http://localhost:8000/v1", permissions), "granted");
+  assert.equal(await localNetworkPermissionState("http://192.168.1.20:8000/v1", permissions), "denied");
+  assert.deepEqual(queried, ["loopback-network", "local-network"]);
+
+  const aliasOnly = { query: async ({ name }) => {
+    if (name !== "local-network-access") throw new TypeError("unsupported");
+    return { state: "prompt" };
+  } };
+  assert.equal(await localNetworkPermissionState("http://localhost:8000/v1", aliasOnly), "prompt");
+  assert.equal(await localNetworkPermissionState("http://localhost:8000/v1", null), "unsupported");
 });
 
 test("rejects public, credential-bearing, and wildcard endpoints", () => {
