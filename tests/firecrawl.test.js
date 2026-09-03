@@ -19,6 +19,8 @@ test("Firecrawl search sends the v2 contract and formats cited Markdown", async 
   };
   const result = await searchFirecrawl("http://localhost:3002", { query: "local inference", limit: 3 }, { fetchImpl });
   assert.equal(called.url, "http://localhost:3002/v2/search");
+  assert.equal(called.init.targetAddressSpace, "loopback");
+  assert.equal(called.init.credentials, "omit");
   assert.deepEqual(called.body.sources, ["web"]);
   assert.deepEqual(called.body.scrapeOptions.formats, [{ type: "markdown" }]);
   assert.match(result, /Local result[\s\S]*https:\/\/example\.test\/source[\s\S]*# Body/);

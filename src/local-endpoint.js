@@ -53,8 +53,28 @@ function isPrivateIpv6(hostname) {
   return (value & 0xfe00) === 0xfc00 || (value & 0xffc0) === 0xfe80;
 }
 
+function normalizedHostname(hostname) {
+  return hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = normalizedHostname(hostname);
+  if (normalized === "localhost" || normalized.endsWith(".localhost")) return true;
+
+  const ipv4 = parseIpv4(normalized);
+  if (ipv4) return ipv4[0] === 127;
+  if (normalized === "::1") return true;
+
+  if (normalized.startsWith("::ffff:")) {
+    const mapped = parseIpv4(normalized.slice("::ffff:".length));
+    return mapped?.[0] === 127;
+  }
+
+  return false;
+}
+
 export function isLocalHostname(hostname) {
-  const normalized = hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
+  const normalized = normalizedHostname(hostname);
   if (LOCAL_HOSTNAMES.has(normalized) || normalized.endsWith(".localhost") || normalized.endsWith(".local")) {
     return true;
   }
@@ -62,6 +82,26 @@ export function isLocalHostname(hostname) {
   const ipv4 = parseIpv4(normalized);
   if (ipv4) return isPrivateIpv4(ipv4);
   return normalized.includes(":") && isPrivateIpv6(normalized);
+}
+
+/**
+ * Chromium's Local Network Access permission is keyed to the destination's
+ * address space. Supplying it explicitly makes HTTPS -> LAN/loopback requests
+ * deterministic, including hostnames whose DNS result is not known up front.
+ * Browsers that do not implement the experimental RequestInit member ignore it.
+ */
+export function targetAddressSpaceForEndpoint(input) {
+  const parsed = new URL(normalizeLocalServiceUrl(input));
+  return isLoopbackHostname(parsed.hostname) ? "loopback" : "local";
+}
+
+export function localFetchOptions(endpoint, options = {}) {
+  return {
+    ...options,
+    mode: options.mode ?? "cors",
+    credentials: options.credentials ?? "omit",
+    targetAddressSpace: targetAddressSpaceForEndpoint(endpoint),
+  };
 }
 
 function withDefaultProtocol(value) {

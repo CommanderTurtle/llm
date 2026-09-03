@@ -1,4 +1,4 @@
-import { normalizeLocalServiceUrl } from "./local-endpoint.js";
+import { localFetchOptions, normalizeLocalServiceUrl } from "./local-endpoint.js";
 import { SseDataParser } from "./openai.js";
 
 export const MODERN_MCP_VERSION = "2026-07-28";
@@ -195,13 +195,13 @@ export class McpHttpClient {
     Object.assign(headers, options.headers ?? {});
     let response;
     try {
-      response = await this.fetchImpl(this.url, {
+      response = await this.fetchImpl(this.url, localFetchOptions(this.url, {
         method: "POST",
         headers,
         body: JSON.stringify(payload),
         cache: "no-store",
         signal: options.signal,
-      });
+      }));
     } catch (error) {
       const detail = error instanceof Error && error.message ? ` ${error.message}` : "";
       throw new McpError(`The browser could not reach the local MCP endpoint.${detail}`, { code: "NETWORK_ERROR", cause: error });
@@ -311,10 +311,10 @@ export class McpHttpClient {
 
   async close() {
     if (this.mode !== "legacy" || !this.sessionId) return;
-    await this.fetchImpl(this.url, {
+    await this.fetchImpl(this.url, localFetchOptions(this.url, {
       method: "DELETE",
       headers: { "MCP-Protocol-Version": this.protocolVersion, "Mcp-Session-Id": this.sessionId },
-    }).catch(() => {});
+    })).catch(() => {});
     this.sessionId = "";
   }
 }

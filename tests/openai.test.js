@@ -11,11 +11,29 @@ test("SSE parser preserves chunk boundaries and multi-line data", () => {
 });
 
 test("model discovery returns stable unique model ids", async () => {
-  const fetchImpl = async () => new Response(JSON.stringify({ data: [{ id: "z" }, { id: "a" }, { id: "a" }] }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  let request;
+  const fetchImpl = async (url, init) => {
+    request = { url, init };
+    return new Response(JSON.stringify({ data: [{ id: "z" }, { id: "a" }, { id: "a" }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
   assert.deepEqual(await discoverModels("http://localhost:8000/v1", { fetchImpl }), ["a", "z"]);
+  assert.equal(request.url, "http://localhost:8000/v1/models");
+  assert.equal(request.init.targetAddressSpace, "loopback");
+  assert.equal(request.init.mode, "cors");
+  assert.equal(request.init.credentials, "omit");
+});
+
+test("model discovery fails clearly instead of hanging on an unreachable endpoint", async () => {
+  const fetchImpl = async (_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+  });
+  await assert.rejects(
+    discoverModels("http://127.0.0.1:65530/v1", { fetchImpl, timeoutMs: 5 }),
+    (error) => error?.code === "TIMEOUT" && /127\.0\.0\.1:65530\/v1\/models/.test(error.message),
+  );
 });
 
 test("chat completion combines content, reasoning, finish reason, and usage", async () => {
@@ -30,7 +48,11 @@ test("chat completion combines content, reasoning, finish reason, and usage", as
     },
   });
   const deltas = [];
-  const fetchImpl = async () => new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  let requestInit;
+  const fetchImpl = async (_url, init) => {
+    requestInit = init;
+    return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  };
   const result = await streamChatCompletion(
     "http://localhost:8000/v1",
     { model: "local", messages: [{ role: "user", content: "hi" }] },
@@ -42,6 +64,7 @@ test("chat completion combines content, reasoning, finish reason, and usage", as
   assert.equal(result.finishReason, "stop");
   assert.equal(result.usage.total_tokens, 12);
   assert.equal(deltas.length, 2);
+  assert.equal(requestInit.targetAddressSpace, "loopback");
 });
 
 test("streamed tool-call fragments become one OpenAI tool call", async () => {
