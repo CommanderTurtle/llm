@@ -5,11 +5,14 @@ import {
   activeSession,
   createSession,
   createWorkspace,
+  defaultFeatures,
+  FEATURE_KEYS,
   parseWorkspaceDocument,
   sessionFromConversation,
   touchSession,
   workspaceDocument,
   WORKSPACE_SCHEMA,
+  WORKSPACE_VERSION,
 } from "../src/workspace.js";
 import { createMessage } from "../src/transcript.js";
 
@@ -56,5 +59,69 @@ test("legacy conversation imports become isolated sessions with their attachment
 
 test("workspace rejects unknown schemas and future versions", () => {
   assert.throws(() => parseWorkspaceDocument({ schema: "elsewhere", sessions: [{}] }), /not an llm workspace/);
-  assert.throws(() => parseWorkspaceDocument({ schema: WORKSPACE_SCHEMA, version: 2, sessions: [{}] }), /newer/);
+  assert.throws(() => parseWorkspaceDocument({ schema: WORKSPACE_SCHEMA, version: WORKSPACE_VERSION + 1, sessions: [{}] }), /newer/);
+});
+
+test("the feature matrix is wholly opt-in and derives no baseline tools", () => {
+  const workspace = createWorkspace();
+  assert.deepEqual(workspace.integrations.features, defaultFeatures());
+  assert.deepEqual(Object.keys(workspace.integrations.features), [...FEATURE_KEYS]);
+  assert.ok(Object.values(workspace.integrations.features).every((value) => value === false));
+  assert.deepEqual(workspace.integrations.localTools, { context: false, read: false, write: false, todos: false });
+  assert.equal(workspace.sessions[0].parameters.maxTokens, 8192);
+});
+
+test("legacy v1 workspaces migrate with enhancements disabled", () => {
+  const restored = parseWorkspaceDocument({
+    schema: "https://llm.shel.sh/schemas/workspace-v1.json",
+    version: 1,
+    activeSessionId: "legacy",
+    sessions: [{ id: "legacy", messages: [] }],
+  });
+  assert.equal(restored.version, WORKSPACE_VERSION);
+  assert.equal(activeSession(restored).id, "legacy");
+  assert.ok(Object.values(restored.integrations.features).every((value) => value === false));
+});
+
+test("enabled feature state persists and write tools imply the required reads", () => {
+  const restored = parseWorkspaceDocument(workspaceDocument(createWorkspace({
+    integrations: { features: { writeTools: true, richMarkdown: true, parallelSessions: true } },
+  })));
+  assert.equal(restored.integrations.features.writeTools, true);
+  assert.equal(restored.integrations.features.readTools, true);
+  assert.equal(restored.integrations.features.richMarkdown, true);
+  assert.equal(restored.integrations.features.parallelSessions, true);
+  assert.deepEqual(restored.integrations.localTools, { context: true, read: true, write: true, todos: false });
+});
+
+test("Auto output allowance is globally consistent with its feature checkbox", () => {
+  const automatic = createWorkspace({
+    sessions: [{ parameters: { maxTokens: 1234 } }, { parameters: { maxTokens: 5678 } }],
+    integrations: { features: { autoMaxTokens: true } },
+  });
+  assert.deepEqual(automatic.sessions.map((session) => session.parameters.maxTokens), [null, null]);
+  const baseline = createWorkspace({ sessions: [{ parameters: { maxTokens: null } }] });
+  assert.equal(baseline.sessions[0].parameters.maxTokens, 8192);
+});
+
+test("imported resource sections cannot diverge from their exact stored content", () => {
+  const workspace = createWorkspace({ sessions: [{ resources: [{
+    id: "resource-1", content: "exact source", sections: ["different projection"],
+  }] }] });
+  assert.deepEqual(workspace.sessions[0].resources[0].sections, ["exact source"]);
+});
+
+test("undo snapshots retain attachment bytes needed by restored turns", () => {
+  const attachment = {
+    id: "image-1", name: "fixture.png", type: "image/png", size: 3, kind: "image",
+    dataUrl: "data:image/png;base64,AAEC", text: "", sourceFormat: "png", createdAt: new Date().toISOString(), meta: {},
+  };
+  const workspace = createWorkspace({
+    sessions: [{
+      attachments: [attachment],
+      messages: [createMessage("user", "image", { id: "message-1", attachments: [attachment.id] })],
+      undo: [{ type: "delete-message", index: 0, messages: [createMessage("user", "image", { attachments: [attachment.id] })], attachments: [attachment] }],
+    }],
+  });
+  assert.equal(workspace.sessions[0].undo[0].attachments[0].dataUrl, attachment.dataUrl);
 });

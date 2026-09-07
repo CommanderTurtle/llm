@@ -83,10 +83,21 @@ export function normalizeParameters(parameters = {}) {
   const requestedEffort = typeof parameters.reasoningEffort === "string"
     ? parameters.reasoningEffort
     : typeof parameters.reasoning_effort === "string" ? parameters.reasoning_effort : "";
+  const hasMaxTokens = Object.hasOwn(parameters, "maxTokens") || Object.hasOwn(parameters, "max_tokens");
+  const maxTokenValue = Object.hasOwn(parameters, "maxTokens") ? parameters.maxTokens : parameters.max_tokens;
+  const parsedMaxTokens = finiteNumber(maxTokenValue, 8192, { min: 1 });
+  const maxTokens = hasMaxTokens && (maxTokenValue === "" || maxTokenValue == null)
+    ? null
+    : Math.trunc(parsedMaxTokens);
+  const contextValue = parameters.contextWindow ?? parameters.context_window;
+  const contextWindow = contextValue === "" || contextValue == null
+    ? 131_072
+    : Math.trunc(finiteNumber(contextValue, 131_072, { min: 1 }));
   return {
     temperature: finiteNumber(parameters.temperature, 0.6, { min: 0, max: 2 }),
     topP: finiteNumber(parameters.topP ?? parameters.top_p, 0.95, { min: 0, max: 1 }),
-    maxTokens: Math.trunc(finiteNumber(parameters.maxTokens ?? parameters.max_tokens, 8192, { min: 1 })),
+    maxTokens,
+    contextWindow,
     seed: seed == null ? null : Math.trunc(seed),
     reasoningEffort: REASONING_EFFORTS.has(requestedEffort) ? requestedEffort : "",
     enableThinking: booleanValue(parameters.enableThinking ?? parameters.enable_thinking, true),
@@ -114,7 +125,7 @@ function normalizeImportedMessage(value, index) {
     name: value.name,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : undefined,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : undefined,
-    state: value.state === "stopped" || value.state === "error" ? value.state : "complete",
+    state: ["stopped", "interrupted", "error"].includes(value.state) ? value.state : "complete",
     meta: value.meta,
     error: value.error,
   });
@@ -209,18 +220,27 @@ function imageAttachmentText(attachment) {
   return `\n\n<image_attachment id=${JSON.stringify(attachment.id)} name=${JSON.stringify(attachment.name)} type=${JSON.stringify(attachment.type)} />`;
 }
 
-export function apiMessages(messages, systemPrompt = "", attachments = []) {
+export function apiMessages(messages, systemPrompt = "", attachments = [], options = {}) {
   const result = [];
   if (systemPrompt.trim()) result.push({ role: "system", content: systemPrompt.trim() });
+  if (typeof options.compactionEnvelope === "string" && options.compactionEnvelope.trim()) {
+    result.push({ role: "system", content: options.compactionEnvelope.trim() });
+  }
+  const compactedIds = new Set(options.compactedMessageIds ?? []);
+  const imageOverrides = options.imageOverrides instanceof Map ? options.imageOverrides : new Map();
+  const resourceIndexes = options.resourceIndexes instanceof Map ? options.resourceIndexes : new Map();
+  const reasoningMessageIds = new Set(options.reasoningMessageIds ?? []);
   const attachmentMap = attachments instanceof Map ? attachments : new Map(attachments.map((item) => [item.id, item]));
 
   for (const message of messages) {
+    if (compactedIds.has(message.id)) continue;
     if (!SUPPORTED_ROLES.has(message.role)) continue;
     if (message.state === "error" && !message.content && !message.toolCalls?.length) continue;
 
     if (message.role === "tool") {
       if (!message.toolCallId || !message.content) continue;
-      result.push({ role: "tool", tool_call_id: message.toolCallId, ...(message.name ? { name: message.name } : {}), content: message.content });
+      const projectedContent = resourceIndexes.get(message.meta?.resourceId) || message.content;
+      result.push({ role: "tool", tool_call_id: message.toolCallId, ...(message.name ? { name: message.name } : {}), content: projectedContent });
       continue;
     }
 
@@ -228,8 +248,14 @@ export function apiMessages(messages, systemPrompt = "", attachments = []) {
       result.push({
         role: "assistant",
         content: message.content || null,
+        ...(options.preserveToolReasoning && message.reasoning ? { reasoning_content: message.reasoning } : {}),
         tool_calls: message.toolCalls.map((call) => normalizeToolCall(call)).filter(Boolean),
       });
+      continue;
+    }
+
+    if (message.role === "assistant" && reasoningMessageIds.has(message.id) && message.reasoning) {
+      result.push({ role: "assistant", content: message.content || null, reasoning_content: message.reasoning });
       continue;
     }
 
@@ -241,7 +267,10 @@ export function apiMessages(messages, systemPrompt = "", attachments = []) {
     if (message.role === "user" && images.length) {
       const content = [];
       if (text) content.push({ type: "text", text });
-      for (const image of images) content.push({ type: "image_url", image_url: { url: image.dataUrl } });
+      for (const image of images) {
+        const override = imageOverrides.get(image.id);
+        content.push({ type: "image_url", image_url: { url: override?.dataUrl || image.dataUrl } });
+      }
       result.push({ role: message.role, content });
     } else {
       result.push({ role: message.role, content: text });

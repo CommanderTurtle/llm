@@ -7,6 +7,7 @@ import {
   conversationDocument,
   conversationMarkdown,
   createMessage,
+  normalizeParameters,
   parseConversationDocument,
 } from "../src/transcript.js";
 
@@ -35,6 +36,55 @@ test("exports a versioned conversation with attachments and tool history", () =>
   assert.equal(documentValue.messages[1].reasoning, "brief");
   assert.equal(documentValue.messages[1].toolCalls[0].id, "call-1");
   assert.equal(documentValue.messages[2].toolCallId, "call-1");
+});
+
+test("max tokens retain the 8192 baseline unless Auto is explicit", () => {
+  assert.equal(normalizeParameters({}).maxTokens, 8192);
+  assert.equal(normalizeParameters({ maxTokens: null }).maxTokens, null);
+  assert.equal(normalizeParameters({ max_tokens: "" }).maxTokens, null);
+  assert.equal(normalizeParameters({ maxTokens: 4096 }).maxTokens, 4096);
+});
+
+test("reasoning is replayed only for opted-in tool-call continuity", () => {
+  const assistant = createMessage("assistant", null, {
+    reasoning: "private continuity",
+    toolCalls: [{ id: "call-1", function: { name: "lookup", arguments: "{}" } }],
+  });
+  assert.equal(apiMessages([assistant])[0].reasoning_content, undefined);
+  assert.equal(apiMessages([assistant], "", [], { preserveToolReasoning: true })[0].reasoning_content, "private continuity");
+});
+
+test("reasoning is replayed for one explicit interrupted-turn recovery only", () => {
+  const assistant = createMessage("assistant", "partial", { id: "recover", reasoning: "private recovery state" });
+  assert.equal(apiMessages([assistant])[0].reasoning_content, undefined);
+  assert.equal(apiMessages([assistant], "", [], { reasoningMessageIds: new Set([assistant.id]) })[0].reasoning_content, "private recovery state");
+});
+
+test("projection can substitute image retries and losslessly collapse selected ids", () => {
+  const user = createMessage("user", "inspect", { id: "selected", attachments: ["image"] });
+  const keep = createMessage("assistant", "keep", { id: "keep" });
+  const attachments = [{ id: "image", name: "x.png", type: "image/png", kind: "image", dataUrl: "data:image/png;base64,OLD" }];
+  const projected = apiMessages([user, keep], "", attachments, {
+    compactedMessageIds: ["selected"],
+    compactionEnvelope: "summary plus exact ids",
+    imageOverrides: new Map([["image", { dataUrl: "data:image/png;base64,NEW" }]]),
+  });
+  assert.deepEqual(projected, [
+    { role: "system", content: "summary plus exact ids" },
+    { role: "assistant", content: "keep" },
+  ]);
+  const image = apiMessages([user], "", attachments, { imageOverrides: new Map([["image", { dataUrl: "data:image/png;base64,NEW" }]]) });
+  assert.equal(image[0].content[1].image_url.url, "data:image/png;base64,NEW");
+  assert.equal(attachments[0].dataUrl, "data:image/png;base64,OLD");
+});
+
+test("resource indexes alter only projection while exact tool output remains stored", () => {
+  const tool = createMessage("tool", "exact Firecrawl output\n\n", {
+    id: "tool-message", toolCallId: "call-1", name: "web_scrape", meta: { resourceId: "resource-1" },
+  });
+  const projected = apiMessages([tool], "", [], { resourceIndexes: new Map([["resource-1", "compact resource index"]]) });
+  assert.equal(projected[0].content, "compact resource index");
+  assert.equal(tool.content, "exact Firecrawl output\n\n");
 });
 
 test("imports both harness documents and plain OpenAI text-message arrays", () => {

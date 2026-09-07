@@ -122,7 +122,7 @@ function boundedSignal(source, timeoutMs) {
   };
 }
 
-export async function discoverModels(endpoint, options = {}) {
+export async function discoverModelCatalog(endpoint, options = {}) {
   const base = normalizeLocalEndpoint(endpoint);
   const url = endpointResource(base, "models");
   const bounded = boundedSignal(options.signal, options.timeoutMs);
@@ -159,12 +159,25 @@ export async function discoverModels(endpoint, options = {}) {
     });
   }
 
-  const models = data
-    .map((item) => (typeof item === "string" ? item : item?.id))
-    .filter((id) => typeof id === "string" && id.trim())
-    .map((id) => id.trim());
+  const byId = new Map();
+  for (const item of data) {
+    const id = (typeof item === "string" ? item : item?.id)?.trim?.();
+    if (!id) continue;
+    const candidate = typeof item === "object" && item ? item : {};
+    const contextWindow = [
+      candidate.max_model_len,
+      candidate.maxModelLen,
+      candidate.context_length,
+      candidate.contextLength,
+      candidate.max_sequence_length,
+    ].map(Number).find((value) => Number.isFinite(value) && value > 0) ?? null;
+    byId.set(id, { id, contextWindow, raw: candidate });
+  }
+  return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
 
-  return [...new Set(models)].sort((left, right) => left.localeCompare(right));
+export async function discoverModels(endpoint, options = {}) {
+  return (await discoverModelCatalog(endpoint, options)).map((item) => item.id);
 }
 
 function applyChunk(chunk, aggregate, onDelta) {
@@ -222,7 +235,10 @@ function applyChunk(chunk, aggregate, onDelta) {
     if (delta.function_call.arguments) aggregate.toolCalls[0].function.arguments += delta.function_call.arguments;
     toolChanged = true;
   }
-  if (choice.finish_reason != null) aggregate.finishReason = choice.finish_reason;
+  if (choice.finish_reason != null) {
+    aggregate.finishReason = choice.finish_reason;
+    aggregate.sawFinishReason = true;
+  }
 
   if (content || reasoning || toolChanged) onDelta?.({ content, reasoning, toolCalls: aggregate.toolCalls, aggregate: { ...aggregate } });
 }
@@ -270,6 +286,9 @@ export async function streamChatCompletion(endpoint, request, options = {}) {
     finishReason: null,
     usage: null,
     toolCalls: [],
+    sawDone: false,
+    sawFinishReason: false,
+    terminal: false,
   };
 
   const contentType = response.headers.get("content-type") ?? "";
@@ -284,6 +303,7 @@ export async function streamChatCompletion(endpoint, request, options = {}) {
       });
     }
     applyChunk(payload, aggregate, options.onDelta);
+    aggregate.terminal = aggregate.sawFinishReason;
     return aggregate;
   }
 
@@ -296,6 +316,7 @@ export async function streamChatCompletion(endpoint, request, options = {}) {
     for (const value of values) {
       if (value.trim() === "[DONE]") {
         done = true;
+        aggregate.sawDone = true;
         continue;
       }
       if (!value.trim()) continue;
@@ -316,5 +337,6 @@ export async function streamChatCompletion(endpoint, request, options = {}) {
     reader.releaseLock();
   }
 
+  aggregate.terminal = aggregate.sawDone || aggregate.sawFinishReason;
   return aggregate;
 }
