@@ -46,7 +46,28 @@ This checklist is the implementation contract for the static `llm.shel.sh` harne
 - [x] Rewrite README and architecture documentation to match the finished implementation and its browser/CORS boundaries.
 - [x] Review the final diff, verify all third-party licenses are present, and commit the finished repository.
 
+## Opt-in reliability and browser-workspace pass
+
+- [x] Add a persisted feature matrix whose thirteen options all default to disabled.
+- [x] Preserve the `fb2a460` interaction/request contract when every option is disabled, including the 8192-token allowance and baseline tool list.
+- [x] Detect output-limit, empty-output, and missing-terminal completions without adding a generation timeout; preserve partial output and offer manual Continue.
+- [x] Add an Auto/server-decided output allowance that omits `max_tokens` only when selected.
+- [x] Add lazy syntax highlighting, Mermaid, math, task lists, code copy, and lightweight diagnostics.
+- [x] Let each session own an independent stream and Stop control when Parallel chats is enabled.
+- [x] Add whole-chat Markdown copy and local a.shel.sh link encoding.
+- [x] Retry image-dimension `ValueError`s with proportional browser projections reduced by exactly 128 pixels on the longest side, without mutating originals.
+- [x] Preserve outer and nested scroll/disclosure state while streaming when Stable streaming scroll is selected.
+- [x] Add per-session token/context estimates and a circular context meter.
+- [x] Add reversible Soft and Normal context projection with exact original turns retained.
+- [x] Index unusually long Firecrawl results into exact, ordered, model-readable sections.
+- [x] Add model-visible context/reasoning reads and a visible TODO checklist/tool.
+- [x] Add revisioned browser documents and `instructions.md` with hashline read-before-write, stale-write rejection, diffs, and diagnostics.
+- [x] Add browser-local undo for deleted turn groups, including the exact attachment bytes required to restore them.
+- [x] Reject forged calls to every disabled opt-in browser tool.
+
 ## Verification record
 
 - 2026-09-02: `bun run check` passed 32 tests across eight files, the in-memory browser build, 58-id DOM contract validation, vendored-file checks, and a real AnyDoc WASM RTF conversion.
 - 2026-09-02: real-browser fixture verified model discovery, streamed reasoning/final output, code copy, refresh recovery, multiple persisted chats and drafts, transcript editing, text/image/PDF attachments, multimodal payloads, real bundled Tesseract OCR, Firecrawl search continuation, and current stateless MCP discovery/call continuation.
+- 2026-09-07: `bun run check` passed 62 tests across twelve files, the in-memory browser build, 114-id DOM contract, all-disabled baseline assertions, vendored assets, a.shel.sh round trips, and a real AnyDoc WASM RTF conversion.
+- 2026-09-07: fresh-origin browser fixtures verified baseline connect/send, persisted all-disabled state, lazy highlighted code/math/Mermaid/task rendering, missing-final reasoning recovery through Continue, two simultaneous session streams, background-generation feature guards, TODOs, document revisions/diffs, reversible Normal compaction, exact long Firecrawl section projection, and zero browser warnings/errors.

@@ -1,5 +1,6 @@
 node_modules/
 coverage/
+.build-check/
 .tmp/
 .DS_Store
 Thumbs.db

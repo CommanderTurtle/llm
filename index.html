@@ -7,6 +7,7 @@
     <meta name="description" content="A persistent static browser harness for private-LAN OpenAI-compatible language models and tools." />
     <title>llm.shel.sh</title>
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./vendor/markdown/github-dark.min.css" />
   </head>
   <body>
     <header class="topbar">
@@ -16,6 +17,13 @@
       <span id="connection-status" class="status" data-state="idle" role="status" aria-live="polite">Not connected</span>
       <span class="topbar-spacer"></span>
       <button id="export-markdown" type="button">Markdown</button>
+      <button id="copy-markdown" class="icon-button" type="button" title="Copy conversation Markdown" aria-label="Copy conversation Markdown" hidden>⧉</button>
+      <button id="share-markdown" class="icon-button" type="button" title="Open conversation Markdown in a.shel.sh" aria-label="Open conversation Markdown in a.shel.sh" hidden>↗</button>
+      <button id="undo" class="icon-button" type="button" title="Undo last deleted turn" aria-label="Undo last deleted turn" disabled hidden>↶</button>
+      <button id="open-workspace" type="button" hidden>Workspace</button>
+      <button id="context-meter" class="context-meter" type="button" title="View context and compaction" aria-label="View context and compaction" hidden>
+        <span id="context-ring" class="context-ring"><span id="context-percent">0%</span></span>
+      </button>
       <button id="print-chat" type="button">Save PDF</button>
       <button id="import-state" type="button">Import state</button>
       <button id="export-state" type="button">Save state</button>
@@ -92,6 +100,9 @@
             <label for="max-tokens">Max tokens</label>
             <input id="max-tokens" type="number" min="1" step="1" value="8192" />
 
+            <label id="context-window-label" for="context-window" hidden>Context window</label>
+            <input id="context-window" type="number" min="1" step="1" value="131072" hidden />
+
             <label for="seed">Seed</label>
             <input id="seed" type="number" step="1" placeholder="Random" />
 
@@ -107,6 +118,30 @@
             </select>
           </div>
           <label class="check-row"><input id="enable-thinking" type="checkbox" checked /> Pass <code>enable_thinking</code></label>
+        </details>
+
+        <details id="feature-matrix">
+          <summary>Feature matrix</summary>
+          <p class="hint">Every enhancement is opt-in. With all boxes clear, requests and interaction match the last baseline release.</p>
+          <div class="feature-matrix">
+            <label class="feature-row"><input id="feature-stream-recovery" type="checkbox" /><span><strong>Interrupted-response recovery</strong><small>Recognize missing terminal signals or output limits and offer Continue.</small></span></label>
+            <label class="feature-row"><input id="feature-auto-max-tokens" type="checkbox" /><span><strong>Server-decided output allowance</strong><small>Omit <code>max_tokens</code>; disabling restores the 8192 baseline.</small></span></label>
+            <label class="feature-row"><input id="feature-rich-markdown" type="checkbox" /><span><strong>Rich Markdown</strong><small>Syntax highlighting, Mermaid, math, task lists, and inline diagnostics.</small></span></label>
+            <label class="feature-row"><input id="feature-parallel-sessions" type="checkbox" /><span><strong>Parallel chats</strong><small>Switch or create chats while other sessions continue generating.</small></span></label>
+            <label class="feature-row"><input id="feature-markdown-actions" type="checkbox" /><span><strong>Markdown copy + link</strong><small>Show whole-chat copy and a.shel.sh link actions.</small></span></label>
+            <label class="feature-row"><input id="feature-vision-retry" type="checkbox" /><span><strong>Vision resize recovery</strong><small>Retry dimension ValueErrors in-browser, reducing the longest side by 128px each time.</small></span></label>
+            <label class="feature-row"><input id="feature-stable-scroll" type="checkbox" /><span><strong>Stable streaming scroll</strong><small>Follow only near the bottom and preserve open reasoning plus nested scroll positions.</small></span></label>
+            <label class="feature-row"><input id="feature-context-meter" type="checkbox" /><span><strong>Context meter</strong><small>Show per-chat token estimates and the circular context gauge.</small></span></label>
+            <label class="feature-row"><input id="feature-compaction" type="checkbox" /><span><strong>Lossless context controls</strong><small>Soft Firecrawl indexing and selected Normal summaries with restorable originals.</small></span></label>
+            <label class="feature-row"><input id="read-tools-enabled" type="checkbox" /><span><strong>Browser read tools</strong><small>Let the model reopen exact context, reasoning, instructions, and documents.</small></span></label>
+            <label class="feature-row"><input id="write-tools-enabled" type="checkbox" /><span><strong>Hashline write tools</strong><small>Revisioned document and instructions PUT after a required current read.</small></span></label>
+            <label class="feature-row"><input id="todo-tools-enabled" type="checkbox" /><span><strong>TODO tool</strong><small>Expose the visible, per-chat checklist to the model and user.</small></span></label>
+            <label class="feature-row"><input id="feature-undo-delete" type="checkbox" /><span><strong>Undo deleted turns</strong><small>Keep a short browser-local undo stack for transcript deletions.</small></span></label>
+          </div>
+          <div class="matrix-actions">
+            <button id="feature-enable-all" type="button">Enable all</button>
+            <button id="feature-disable-all" type="button">Disable all</button>
+          </div>
         </details>
 
         <details id="tools-settings" open>
@@ -178,6 +213,75 @@
           <button class="primary" value="allow">Allow</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="context-dialog" class="wide-dialog">
+      <div class="dialog-card">
+        <h2>Context</h2>
+        <p id="context-detail" class="hint"></p>
+        <div id="context-timeline" class="context-timeline" aria-label="Conversation timeline"></div>
+        <div id="compaction-controls">
+          <div class="context-actions">
+            <button id="compact-soft" type="button">Soft · index Firecrawl</button>
+            <button id="compact-normal" class="primary" type="button">Normal · summarize selected</button>
+            <button id="restore-context" type="button">Restore originals</button>
+          </div>
+          <label for="compaction-prompt">Stateless summarizer prompt</label>
+          <textarea id="compaction-prompt" rows="5"></textarea>
+          <div class="panel-heading compact-heading">
+            <h3>Select exact entries for Normal compaction</h3>
+            <button id="select-older-context" type="button">Select older</button>
+          </div>
+          <div id="compaction-messages" class="compaction-list"></div>
+          <div id="active-compaction" class="active-compaction"></div>
+        </div>
+        <div class="dialog-actions">
+          <button id="close-context" type="button">Close</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="workspace-dialog" class="wide-dialog">
+      <div class="dialog-card">
+        <div class="dialog-title-row">
+          <div>
+            <h2>Browser workspace</h2>
+            <p class="hint">TODOs, instructions, documents, and every revision live only in this saved chat.</p>
+          </div>
+          <button id="close-workspace" type="button" aria-label="Close workspace">×</button>
+        </div>
+        <section id="todo-workspace-section" class="workspace-section">
+          <h3>TODO</h3>
+          <div id="todo-list" class="todo-list"></div>
+          <div class="workspace-add-row">
+            <input id="todo-input" type="text" placeholder="Add a task" />
+            <button id="add-todo" type="button">Add</button>
+          </div>
+        </section>
+        <section id="document-workspace-section" class="workspace-section">
+          <div class="document-toolbar">
+            <select id="document-select" aria-label="Document"></select>
+            <button id="new-document" type="button">New</button>
+            <button id="open-instructions" type="button">Instructions</button>
+            <select id="document-revision" aria-label="Revision"></select>
+          </div>
+          <div class="document-fields">
+            <input id="document-name" type="text" placeholder="document.md" />
+            <input id="document-language" type="text" placeholder="markdown" />
+          </div>
+          <textarea id="document-content" class="document-editor" rows="16" spellcheck="false" placeholder="A model can create a document with put_document, or you can write one here."></textarea>
+          <div class="document-actions">
+            <span id="document-diagnostics" class="hint"></span>
+            <span class="topbar-spacer"></span>
+            <button id="save-document" class="primary" type="button">Save revision</button>
+          </div>
+          <details id="document-diff-details">
+            <summary>Revision diff</summary>
+            <div id="document-diff" class="diff-view"></div>
+          </details>
+          <div id="document-preview" class="document-preview message-body"></div>
+        </section>
+      </div>
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

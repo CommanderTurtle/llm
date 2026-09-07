@@ -1,3 +1,12 @@
+import { lintCode } from "./documents.js";
+import { loadClassicScript } from "./vendor-loader.js";
+
+const HIGHLIGHT_URL = new URL("../vendor/markdown/highlight.min.js", import.meta.url).href;
+const MERMAID_URL = new URL("../vendor/markdown/mermaid.min.js", import.meta.url).href;
+const TEMML_URL = new URL("../vendor/markdown/temml.min.mjs", import.meta.url).href;
+let temmlPromise;
+let mermaidInitialized = false;
+
 function safeLink(value) {
   try {
     const url = new URL(value);
@@ -26,8 +35,23 @@ export async function copyText(value) {
   if (!copied) throw new Error("The browser did not grant clipboard access.");
 }
 
-function appendInline(parent, text) {
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^)\n]+\)|<https?:\/\/[^>\n]+>)/g;
+async function renderMath(element, source, displayMode = false) {
+  element.classList.add(displayMode ? "math-display" : "math-inline");
+  element.textContent = source;
+  try {
+    temmlPromise ??= import(TEMML_URL);
+    const temml = (await temmlPromise).default;
+    temml.render(source, element, { displayMode, throwOnError: false, strict: false });
+  } catch (error) {
+    element.classList.add("math-error");
+    element.title = error instanceof Error ? error.message : "Math rendering failed";
+  }
+}
+
+function appendInline(parent, text, options = {}) {
+  const pattern = options.rich
+    ? /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^)\n]+\)|<https?:\/\/[^>\n]+>|\$(?!\s)(?:\\.|[^$\n])+(?<!\s)\$)/g
+    : /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^)\n]+\)|<https?:\/\/[^>\n]+>)/g;
   let cursor = 0;
 
   for (const match of text.matchAll(pattern)) {
@@ -64,7 +88,7 @@ function appendInline(parent, text) {
         }
         parent.append(anchor);
       }
-    } else {
+    } else if (token.startsWith("<")) {
       const href = token.slice(1, -1);
       const url = safeLink(href);
       if (!url) {
@@ -77,6 +101,10 @@ function appendInline(parent, text) {
         anchor.rel = "noopener noreferrer";
         parent.append(anchor);
       }
+    } else {
+      const math = document.createElement("span");
+      void renderMath(math, token.slice(1, -1), false);
+      parent.append(math);
     }
     cursor = index + token.length;
   }
@@ -84,14 +112,62 @@ function appendInline(parent, text) {
   if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
 }
 
-function appendLines(parent, lines) {
+function appendLines(parent, lines, options = {}) {
   lines.forEach((line, index) => {
     if (index) parent.append(document.createElement("br"));
-    appendInline(parent, line);
+    appendInline(parent, line, options);
   });
 }
 
-function codeBlock(code, language, onCopy) {
+async function highlightCode(codeElement, code, language, diagnostics) {
+  try {
+    const hljs = await loadClassicScript(HIGHLIGHT_URL, "hljs");
+    const normalized = String(language || "").toLowerCase();
+    const languageName = normalized && hljs.getLanguage(normalized) ? normalized : "";
+    const errorLines = new Map(diagnostics.map((item) => [item.line, item]));
+    const fragment = document.createDocumentFragment();
+    for (const [index, line] of code.split("\n").entries()) {
+      const wrapper = document.createElement("span");
+      wrapper.className = "code-line";
+      const diagnostic = errorLines.get(index + 1);
+      if (diagnostic) {
+        wrapper.classList.add("code-line-error");
+        wrapper.title = diagnostic.message;
+      }
+      const highlighted = languageName
+        ? hljs.highlight(line || " ", { language: languageName, ignoreIllegals: true }).value
+        : hljs.highlightAuto(line || " ").value;
+      wrapper.innerHTML = highlighted;
+      fragment.append(wrapper);
+    }
+    codeElement.replaceChildren(fragment);
+  } catch {
+    // Exact source text is already visible; presentation enhancement is optional.
+  }
+}
+
+async function drawMermaid(container, code) {
+  try {
+    const mermaid = await loadClassicScript(MERMAID_URL, "mermaid");
+    if (!mermaidInitialized) {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default",
+      });
+      mermaidInitialized = true;
+    }
+    const id = `mermaid-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`.replace(/[^A-Za-z0-9_-]/g, "");
+    const rendered = await mermaid.render(id, code);
+    container.innerHTML = rendered.svg;
+    rendered.bindFunctions?.(container);
+  } catch (error) {
+    container.classList.add("diagram-error");
+    container.textContent = `Mermaid could not render: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+function codeBlock(code, language, onCopy, options = {}) {
   const wrapper = document.createElement("div");
   wrapper.className = "code-block";
 
@@ -121,7 +197,38 @@ function codeBlock(code, language, onCopy) {
   if (language) codeElement.dataset.language = language;
   codeElement.textContent = code;
   pre.append(codeElement);
-  wrapper.append(header, pre);
+  if (!options.rich) {
+    wrapper.append(header, pre);
+    return wrapper;
+  }
+  const diagnostics = lintCode(code, language || "text");
+  const normalizedLanguage = language.toLowerCase();
+  if (["math", "latex", "tex"].includes(normalizedLanguage)) {
+    const math = document.createElement("div");
+    void renderMath(math, code, true);
+    wrapper.classList.add("math-block");
+    wrapper.append(header, math);
+  } else if (normalizedLanguage === "mermaid" && options.diagrams !== false) {
+    const diagram = document.createElement("div");
+    diagram.className = "mermaid-diagram";
+    diagram.textContent = "Rendering diagram…";
+    wrapper.classList.add("diagram-block");
+    wrapper.append(header, diagram);
+    void drawMermaid(diagram, code);
+  } else {
+    wrapper.append(header, pre);
+    void highlightCode(codeElement, code, language, diagnostics);
+  }
+  if (diagnostics.length) {
+    const diagnosticList = document.createElement("div");
+    diagnosticList.className = "code-diagnostics";
+    for (const diagnostic of diagnostics) {
+      const item = document.createElement("p");
+      item.textContent = `L${diagnostic.line}:${diagnostic.column} ${diagnostic.message}`;
+      diagnosticList.append(item);
+    }
+    wrapper.append(diagnosticList);
+  }
   return wrapper;
 }
 
@@ -169,14 +276,28 @@ export function renderMarkdown(markdown, options = {}) {
         index += 1;
       }
       if (index < lines.length) index += 1;
-      fragment.append(codeBlock(body.join("\n"), language, options.onCopy));
+      fragment.append(codeBlock(body.join("\n"), language, options.onCopy, options));
+      continue;
+    }
+
+    if (options.rich && /^\s*\$\$\s*$/.test(line)) {
+      const body = [];
+      index += 1;
+      while (index < lines.length && !/^\s*\$\$\s*$/.test(lines[index])) {
+        body.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      const math = document.createElement("div");
+      void renderMath(math, body.join("\n"), true);
+      fragment.append(math);
       continue;
     }
 
     const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
     if (heading) {
       const element = document.createElement(`h${heading[1].length}`);
-      appendInline(element, heading[2]);
+      appendInline(element, heading[2], options);
       fragment.append(element);
       index += 1;
       continue;
@@ -188,7 +309,7 @@ export function renderMarkdown(markdown, options = {}) {
       const headRow = document.createElement("tr");
       for (const value of splitTableRow(line)) {
         const cell = document.createElement("th");
-        appendInline(cell, value);
+        appendInline(cell, value, options);
         headRow.append(cell);
       }
       head.append(headRow);
@@ -200,7 +321,7 @@ export function renderMarkdown(markdown, options = {}) {
         const row = document.createElement("tr");
         for (const value of splitTableRow(lines[index])) {
           const cell = document.createElement("td");
-          appendInline(cell, value);
+          appendInline(cell, value, options);
           row.append(cell);
         }
         body.append(row);
@@ -218,7 +339,7 @@ export function renderMarkdown(markdown, options = {}) {
         values.push(lines[index].replace(/^\s{0,3}>\s?/, ""));
         index += 1;
       }
-      appendLines(quote, values);
+      appendLines(quote, values, options);
       fragment.append(quote);
       continue;
     }
@@ -231,7 +352,16 @@ export function renderMarkdown(markdown, options = {}) {
         const match = lines[index].match(/^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/);
         if (!match || /^\d/.test(match[1]) !== ordered) break;
         const item = document.createElement("li");
-        appendInline(item, match[2]);
+        const task = match[2].match(/^\[([ xX])\]\s+(.+)$/);
+        if (options.rich && task) {
+          item.className = "task-list-item";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = task[1].toLowerCase() === "x";
+          checkbox.disabled = true;
+          item.append(checkbox);
+          appendInline(item, task[2], options);
+        } else appendInline(item, match[2], options);
         list.append(item);
         index += 1;
       }
@@ -252,7 +382,7 @@ export function renderMarkdown(markdown, options = {}) {
       index += 1;
     }
     const paragraph = document.createElement("p");
-    appendLines(paragraph, paragraphLines);
+    appendLines(paragraph, paragraphLines, options);
     fragment.append(paragraph);
   }
 

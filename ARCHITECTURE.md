@@ -11,23 +11,24 @@ local files ──> attachment preparation ──> session attachment store
                     ├─ document: AnyDoc WASM ──┤
                     └─ ZIP: JSZip/combined.md ─┘
                                                │
-IndexedDB <── versioned workspace <── UI ──> API message projection
-                                               │
-                                               v
-                                   private OpenAI /v1 endpoint
+IndexedDB <── versioned workspace <── UI ──> feature-gated projection
+                    │                          │
+          exact originals/revisions            v
+                    │              private OpenAI /v1 endpoint(s)
+                    └─ compaction/resources ────┤
                                                │
                                   assistant function-tool requests
                                                │
                          approval + bounded browser tool dispatcher
-                            │                 │                │
-                      Tesseract OCR    Firecrawl /v2    MCP HTTP server(s)
+                    │           │              │                │
+              context/docs   Tesseract   Firecrawl /v2    MCP HTTP server(s)
 ```
 
 Only the arrows ending at configured endpoints cross the page boundary. AnyDoc, ZIP processing, Markdown rendering, state normalization, and OCR execute in the browser.
 
 ## Persistent data model
 
-The root object is `workspace-v1`:
+The root object is `workspace-v2`:
 
 ```text
 workspace
@@ -37,16 +38,23 @@ workspace
 │   ├── endpoint, model, systemPrompt, parameters
 │   ├── messages[]
 │   ├── attachments[]
+│   ├── todos[], documents[], resources[]
+│   ├── compactions[], activeCompactionId
+│   ├── undo[]
 │   ├── pendingAttachmentIds[]
 │   └── draft, createdAt, updatedAt
 └── integrations
     ├── approval, maxToolRounds
+    ├── features{}
+    ├── derived localTools{}
     ├── ocr
     ├── firecrawl
     └── mcpServers[]
 ```
 
-`src/workspace.js` is the only constructor/normalizer for this shape. It rejects unknown workspace schemas, future versions, empty session lists, and more than 1,000 sessions. Every imported session is reconstructed rather than trusted as a live object. Attachment references that do not resolve inside their session are removed.
+`src/workspace.js` is the only constructor/normalizer for this shape. It rejects unknown workspace schemas, future versions, empty session lists, and more than 1,000 sessions. Every imported session is reconstructed rather than trusted as a live object. Attachment references that do not resolve inside their session are removed. A `workspace-v1` import migrates to v2 with every new feature disabled.
+
+The persisted feature matrix is wholly opt-in. Its default is thirteen `false` values. Derived local-tool flags are rebuilt from it rather than trusted from imported JSON. Write tools imply read tools because their optimistic-concurrency contract requires a current read receipt.
 
 The IndexedDB database `llm-shel-harness`, object store `state`, key `workspace` contains one normalized snapshot. `src/storage.js` serializes debounced writes so an older asynchronous transaction cannot overwrite a later one. The `pagehide` handler flushes the latest queued snapshot. A persisted response with state `streaming` is recovered as `stopped`/`interrupted`.
 
@@ -76,7 +84,11 @@ Images linked to a user message produce an OpenAI multipart content array contai
 
 The SSE parser holds incomplete UTF-8/text-event fragments across chunks, accepts multi-line `data:` records, and recognizes `[DONE]`. The completion accumulator independently joins content, reasoning fields, and fragmented tool-call arguments by tool index.
 
-The AbortController belongs to exactly one active session request. Session switching, new-session creation, deletion, and state import are blocked until that request finishes or is stopped, so an asynchronous response cannot mutate a different active chat.
+By default, the request contract is unchanged: one foreground AbortController blocks session switching, creation, deletion, and import until it finishes or is stopped. With Parallel chats enabled, a request map gives each generating session its own AbortController and updates that session object directly even while another chat is visible. A generating session cannot be deleted, and Parallel chats cannot be disabled while a background request exists. Import remains blocked until every request stops.
+
+There is no generation timeout. Interrupted-response recovery only inspects terminal evidence already supplied by the endpoint: `[DONE]`, a finish reason, empty output, and `finish_reason: length`. When enabled, suspicious completion is stored as `interrupted`, partial text is retained, and **Continue** adds a transient continuation instruction without adding that instruction to persistent history. Assistant reasoning is replayed only where it is needed for an opted-in tool-call continuation. With recovery disabled, completion classification matches the baseline behavior.
+
+`max_tokens` remains 8192 by default. Server-decided output allowance represents Auto as `null` and omits the field from the JSON request; disabling the feature restores 8192.
 
 ## Tool loop
 
@@ -91,6 +103,25 @@ For each assistant pass, `src/tools.js` constructs the currently enabled OpenAI 
 Denied and failed calls still receive a matching tool-result message containing the error. This preserves the OpenAI tool-message ordering contract and lets the model respond to the failure. Reaching the bound creates matching unexecuted-call errors and stops instead of silently dropping requested calls.
 
 Tool calls execute serially. This produces deterministic transcript order and avoids racing user approval dialogs or multiple side-effecting MCP operations.
+
+### Browser-local context and documents
+
+Feature-gated local tools add no network service. `context_read` exposes a timeline, an exact original message, separately stored reasoning, a compaction record, or one numbered resource section. Long Firecrawl output is normalized once, preserved exactly after that normalization, and divided at readable boundaries; concatenating its sections reproduces the stored resource byte-for-byte.
+
+`read_document` and `instructions_read` return revision metadata, stable FNV-derived line hashes, and diagnostics. A successful read records an in-memory receipt for that session and revision. `put_document` and `instructions_put` reject writes to an existing document without that receipt, reject stale expected revisions, and reject ambiguous or overlapping hash ranges. Every accepted change appends an immutable content snapshot. The UI can compare adjacent revisions as context, removed, and added lines.
+
+The lightweight browser linter validates JSON, balances common code delimiters while respecting strings/comments, and checks Markdown fences plus supported fenced languages. It is deliberately a local diagnostic layer, not a replacement for a language compiler or LSP.
+
+TODO entries are session-local structured records with stable ids, checked state, and timestamps. The visible checklist and model tool operate on the same records.
+
+### Lossless context controls
+
+Compaction changes only API projection:
+
+- **Soft** identifies Firecrawl search/scrape turns, stores clean output as ordered browser resources, and projects an index with exact ids.
+- **Normal** lets the user select completed entries, expands tool-call/result groups, and runs a separate stateless model call with an editable summarizer prompt.
+
+The resulting envelope includes the summary plus the ids/order of every collapsed original. Originals, reasoning, attachments, and resources remain in the session. Restore removes the envelope from projection immediately; Reapply selects the latest saved compaction. The context meter uses projected estimates while compaction is active rather than an old server usage count.
 
 ## OCR
 
@@ -131,7 +162,15 @@ Connection objects and session ids are runtime-only. Persisted MCP records conta
 
 ## Rendering boundary
 
-`src/markdown.js` creates DOM nodes directly and assigns text through `textContent`. Model output is never assigned to `innerHTML`. It supports a deliberately bounded Markdown subset and permits only HTTP(S) and `mailto:` links; HTTP(S) links open with `noopener noreferrer`. Code copy uses the Clipboard API with a textarea fallback.
+The baseline path in `src/markdown.js` creates DOM nodes directly and assigns model text through `textContent`. It supports the original bounded Markdown subset and permits only HTTP(S) and `mailto:` links; HTTP(S) links open with `noopener noreferrer`. Code copy uses the Clipboard API with a textarea fallback.
+
+Rich Markdown is a separate opt-in path. Highlight.js, Mermaid, and Temml are vendored and imported lazily. Highlight and math output is generated by those local renderers; Mermaid diagrams are produced in an isolated render host after a message stops streaming. Task lists and diagnostics remain ordinary DOM. Disabling Rich Markdown returns immediately to the baseline parser.
+
+The whole-chat share action lazily imports the vendored ln.kr/ha.nr codec. Small Markdown uses its V1 text encoder and larger Markdown uses its deflate-backed V4 encoder, then opens the canonical `https://a.shel.sh/#m:` URL. No remote compression request is made.
+
+Stable streaming scroll snapshots the outer chat position, open disclosure state, and inner reasoning/code scroll positions before rerender. It follows output only while the reader is near the bottom. With the box clear, the original forced-follow behavior remains.
+
+Vision resize recovery catches only recognizable image-dimension `ValueError`s before substantive output exists. All referenced image projections are proportionally reduced by exactly 128 pixels on the longest side using canvas, then the same request is retried. Each retry derives from the previous projection. Stored attachment bytes and exports are never modified.
 
 User messages are rendered as pre-wrapped text. Tool outputs and assistant messages use the same Markdown renderer. Reasoning and tool payloads live in native `<details>` elements.
 
@@ -150,6 +189,10 @@ The site must serve `.wasm` as `application/wasm`, `.js` as JavaScript, and `.gz
 | `storage.js` | IndexedDB transactions and write ordering | Schema interpretation |
 | `transcript.js` | Message schemas and API/export projections | Network calls |
 | `openai.js` | `/v1` transport and completion aggregation | UI state |
+| `context.js` | Token estimates, resources, compaction envelopes, timelines | Persistent storage or model calls |
+| `documents.js` | Hashlines, revisions, diffs, lightweight diagnostics | UI or filesystem writes |
+| `image-retry.js` | Browser image projection resizing | Stored attachment mutation |
+| `share.js`, `lnkr/` | Lazy a.shel.sh-compatible Markdown encoding | URL navigation policy |
 | `attachments.js` | Classification and one attachment record | Archive/document internals |
 | `archive.js` | Safe deterministic ZIP-to-Markdown | Generic file selection |
 | `anydoc.js` | AnyDoc WASM lifecycle | Attachment persistence |
@@ -157,10 +200,10 @@ The site must serve `.wasm` as `application/wasm`, `.js` as JavaScript, and `.gz
 | `firecrawl.js` | `/v2` request/response contract | Research strategy |
 | `mcp.js` | MCP transport and name mapping | Tool approval |
 | `tools.js` | OpenAI definitions and dispatch | Model transport |
-| `markdown.js` | Safe presentation and copy | Transcript storage |
+| `markdown.js` | Baseline and opt-in rich presentation | Transcript storage |
 
 ## Verification layers
 
-- Unit tests cover endpoint policy, workspace/conversation interchange, multimodal projection, streaming tool calls, archive rendering, attachment preparation, Firecrawl contracts, and both MCP transport modes.
-- `scripts/check.mjs` builds the browser graph in memory, checks the HTML/JavaScript DOM contract, verifies vendored assets, and runs a real AnyDoc WASM conversion.
+- Unit tests cover endpoint policy, workspace/conversation interchange and migration, feature-default invariants, multimodal projection, terminal evidence, image-retry dimensions, exact context segmentation, compaction projection, hashline write conflicts, revisions/diffs, a.shel.sh round trips, streaming tool calls, archive rendering, attachment preparation, Firecrawl contracts, and both MCP transport modes.
+- `scripts/check.mjs` builds the browser graph in memory, checks the HTML/JavaScript DOM contract and all-disabled controls, verifies vendored assets, and runs a real AnyDoc WASM conversion.
 - `scripts/browser-fixture.mjs` exposes deterministic OpenAI, Firecrawl, and MCP surfaces for an actual-browser smoke test without contacting public services.

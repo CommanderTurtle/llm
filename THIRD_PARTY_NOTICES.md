@@ -38,4 +38,39 @@ The application serves these dependencies from `vendor/`; it does not load them 
 - License: MIT
 - Included package/license metadata: [`vendor/tesseract/LICENSE-traineddata-package.json`](./vendor/tesseract/LICENSE-traineddata-package.json)
 
+## Highlight.js
+
+- Project: [highlightjs/highlight.js](https://github.com/highlightjs/highlight.js)
+- Files: `vendor/markdown/highlight.min.js`, `vendor/markdown/github-dark.min.css`
+- License: BSD 3-Clause
+- Included terms: [`vendor/markdown/highlightjs-LICENSE`](./vendor/markdown/highlightjs-LICENSE)
+
+## Mermaid
+
+- Project: [mermaid-js/mermaid](https://github.com/mermaid-js/mermaid)
+- File: `vendor/markdown/mermaid.min.js`
+- License: MIT
+- Included terms: [`vendor/markdown/mermaid-LICENSE`](./vendor/markdown/mermaid-LICENSE)
+
+## Temml
+
+- Project: [ronkok/Temml](https://github.com/ronkok/Temml)
+- File: `vendor/markdown/temml.min.mjs`
+- License: MIT
+- Included terms: [`vendor/markdown/temml-LICENSE`](./vendor/markdown/temml-LICENSE)
+
+## ln.kr / ha.nr compression codec
+
+- Projects: [CommanderTurtle/ln.kr](https://github.com/CommanderTurtle/ln.kr), derived from [p2r3/ha.nr](https://github.com/p2r3/ha.nr)
+- Files: `src/lnkr/alphabets.js`, `src/lnkr/compress.js`, `src/lnkr/text-compress.js`
+- License: MIT
+- Included terms: [`src/lnkr/LICENSE-ha.nr`](./src/lnkr/LICENSE-ha.nr)
+
+## pako
+
+- Project: [nodeca/pako](https://github.com/nodeca/pako)
+- File: `src/lnkr/vendor/pako.esm.min.js`
+- License: MIT
+- Included terms: [`src/lnkr/vendor/pako-LICENSE`](./src/lnkr/vendor/pako-LICENSE)
+
 The complete license texts and metadata above are distributed alongside the corresponding runtime files.

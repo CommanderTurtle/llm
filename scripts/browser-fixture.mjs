@@ -13,6 +13,7 @@ const mimeTypes = {
   ".gz": "application/gzip",
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".wasm": "application/wasm",
 };
@@ -71,7 +72,7 @@ function rpc(response, id, result, headers = {}) {
   response.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
 }
 
-function streamedCompletion(response, chunks) {
+function streamedCompletion(response, chunks, options = {}) {
   cors(response, 200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache",
@@ -80,12 +81,12 @@ function streamedCompletion(response, chunks) {
   let index = 0;
   const write = () => {
     if (index >= chunks.length) {
-      response.end("data: [DONE]\n\n");
+      response.end(options.done === false ? "" : "data: [DONE]\n\n");
       return;
     }
     response.write(`data: ${JSON.stringify(chunks[index])}\n\n`);
     index += 1;
-    setTimeout(write, 20);
+    setTimeout(write, options.delay ?? 20);
   };
   write();
 }
@@ -114,8 +115,30 @@ function handleCompletion(body, response) {
 
   const userText = textFromUserContent(last?.content);
   const prompt = userText.toLowerCase();
+  if (prompt.includes("cut off fixture")) {
+    streamedCompletion(response, [
+      { id: "fixture-cutoff", model: body.model, choices: [{ delta: { content: "This fixture ends without terminal evidence." } }] },
+    ], { done: false });
+    return;
+  }
+  if (prompt.includes("length fixture")) {
+    streamedCompletion(response, [
+      { id: "fixture-length", model: body.model, choices: [{ delta: { content: "This fixture reaches its output allowance." } }] },
+      { id: "fixture-length", model: body.model, choices: [{ delta: {}, finish_reason: "length" }] },
+    ]);
+    return;
+  }
+  if (prompt.includes("reasoning only fixture")) {
+    streamedCompletion(response, [
+      { id: "fixture-reasoning-only", model: body.model, choices: [{ delta: { reasoning_content: "The final answer has not been emitted yet." } }] },
+      { id: "fixture-reasoning-only", model: body.model, choices: [{ delta: {}, finish_reason: "stop" }] },
+    ]);
+    return;
+  }
   const availableTools = Array.isArray(body.tools) ? body.tools : [];
-  const requestedTool = prompt.includes("search fixture")
+  const requestedTool = prompt.includes("scrape fixture")
+    ? availableTools.find((tool) => tool?.function?.name === "web_scrape")
+    : prompt.includes("search fixture")
     ? availableTools.find((tool) => tool?.function?.name === "web_search")
     : prompt.includes("ocr fixture")
       ? availableTools.find((tool) => tool?.function?.name === "ocr_attachment")
@@ -126,6 +149,7 @@ function handleCompletion(body, response) {
     const imageName = userText.match(/<image_attachment\b[^>]*\bname="([^"]+)"/)?.[1] ?? "ocr.svg";
     const args = requestedTool.function.name === "web_search"
       ? { query: "fixture query", limit: 1 }
+      : requestedTool.function.name === "web_scrape" ? { url: "https://example.test/long" }
       : requestedTool.function.name === "ocr_attachment" ? { attachment: imageName } : { value: "hello" };
     streamedCompletion(response, [
       { id: "fixture-tool", model: body.model, choices: [{ delta: { tool_calls: [{ index: 0, id: "fixture-call-1", type: "function", function: { name: requestedTool.function.name, arguments: JSON.stringify(args).slice(0, 8) } }] } }] },
@@ -141,7 +165,7 @@ function handleCompletion(body, response) {
     { id: "fixture-1", model: body.model, choices: [{ delta: { content: `## Fixture response${hasImage ? " with image" : ""}\n\n` } }] },
     { id: "fixture-1", model: body.model, choices: [{ delta: { content: "```js\nconsole.log('local');\n```" } }] },
     { id: "fixture-1", model: body.model, choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 7, completion_tokens: 9, total_tokens: 16 } },
-  ]);
+  ], { delay: prompt.includes("slow fixture") ? 350 : 20 });
 }
 
 const apiServer = createServer((request, response) => {
@@ -154,7 +178,7 @@ const apiServer = createServer((request, response) => {
 
   if (request.method === "GET" && request.url === "/v1/models") {
     cors(response, 200, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ object: "list", data: [{ id: "fixture-reasoner" }, { id: "fixture-chat" }] }));
+    response.end(JSON.stringify({ object: "list", data: [{ id: "fixture-reasoner", max_model_len: 32768 }, { id: "fixture-chat", context_length: 16384 }] }));
     return;
   }
 
@@ -177,7 +201,8 @@ const apiServer = createServer((request, response) => {
   if (request.method === "POST" && request.url === "/v2/scrape") {
     readJson(request, response, (body) => {
       cors(response, 200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ success: true, data: { markdown: `# Scraped fixture\n\n${body.url}` } }));
+      const long = String(body.url).includes("long") ? `\n\n${"## Ordered section\nfixture paragraph\n\n".repeat(900)}` : "";
+      response.end(JSON.stringify({ success: true, data: { markdown: `# Scraped fixture\n\n${body.url}${long}` } }));
     });
     return;
   }

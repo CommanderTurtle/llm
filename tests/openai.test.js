@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { discoverModels, SseDataParser, streamChatCompletion } from "../src/openai.js";
+import { discoverModelCatalog, discoverModels, SseDataParser, streamChatCompletion } from "../src/openai.js";
 
 test("SSE parser preserves chunk boundaries and multi-line data", () => {
   const parser = new SseDataParser();
@@ -24,6 +24,15 @@ test("model discovery returns stable unique model ids", async () => {
   assert.equal(request.init.targetAddressSpace, "loopback");
   assert.equal(request.init.mode, "cors");
   assert.equal(request.init.credentials, "omit");
+});
+
+test("model discovery retains an advertised context window", async () => {
+  const fetchImpl = async () => new Response(JSON.stringify({
+    data: [{ id: "local", max_model_len: 131072 }],
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  const catalog = await discoverModelCatalog("http://localhost:8000/v1", { fetchImpl });
+  assert.equal(catalog[0].id, "local");
+  assert.equal(catalog[0].contextWindow, 131072);
 });
 
 test("model discovery fails clearly instead of hanging on an unreachable endpoint", async () => {
@@ -63,8 +72,28 @@ test("chat completion combines content, reasoning, finish reason, and usage", as
   assert.equal(result.reasoning, "think ");
   assert.equal(result.finishReason, "stop");
   assert.equal(result.usage.total_tokens, 12);
+  assert.equal(result.sawDone, true);
+  assert.equal(result.sawFinishReason, true);
+  assert.equal(result.terminal, true);
   assert.equal(deltas.length, 2);
   assert.equal(requestInit.targetAddressSpace, "loopback");
+});
+
+test("a clean premature EOF remains distinguishable from a terminal completion", async () => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+      controller.close();
+    },
+  });
+  const result = await streamChatCompletion("http://localhost:8000/v1", { model: "local", messages: [] }, {
+    fetchImpl: async () => new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+  });
+  assert.equal(result.content, "partial");
+  assert.equal(result.sawDone, false);
+  assert.equal(result.sawFinishReason, false);
+  assert.equal(result.terminal, false);
 });
 
 test("streamed tool-call fragments become one OpenAI tool call", async () => {

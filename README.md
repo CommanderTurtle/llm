@@ -16,9 +16,9 @@ Open `http://127.0.0.1:4173/`, leave the default `http://localhost:8000/v1` or e
 
 There is no install or build step. Publish the repository contents directly when deploying it as a static site.
 
-## What is included
+## Baseline behavior
 
-- Multiple named chats with new, switch, rename, and delete actions.
+- Multiple named, resumable chats with new, switch, rename, and delete actions.
 - Automatic IndexedDB persistence for chats, drafts, settings, attachments, tool turns, and integrations.
 - Complete workspace JSON import/export and legacy single-conversation import.
 - Active-chat Markdown export and browser print/save-to-PDF.
@@ -29,6 +29,28 @@ There is no install or build step. Publish the repository contents directly when
 - Bounded model/tool continuation with approval before every call by default.
 
 Refresh resumes the last workspace. It does not reconnect to a model, Firecrawl, or MCP server and does not issue an unsolicited network request.
+
+## Opt-in feature matrix
+
+Every enhancement below starts disabled and is saved in browser state. **Disable all** restores the request and interaction contract of the last baseline release: the 8192-token output allowance, one foreground generation, the original Markdown renderer and scrolling, the original deletion behavior, and only the previously enabled OCR/Firecrawl/MCP tools. Nothing silently enables a dependent tool; the sole dependency is that write tools also enable their required read tools.
+
+| Checkbox | Effect |
+| --- | --- |
+| Interrupted-response recovery | Distinguishes a real terminal signal from clean premature EOF, empty output, or `finish_reason: length`; preserves partial output and offers **Continue**. It adds no timeout. |
+| Server-decided output allowance | Omits `max_tokens` so the endpoint chooses its allowance. Turning it off restores 8192. |
+| Rich Markdown | Lazily enables syntax highlighting, Mermaid, Temml math (`$`, `$$`, and math fences), task lists, code copy, and lightweight code diagnostics. |
+| Parallel chats | Lets independent sessions continue generating while the user switches or starts another chat. Each session owns its own request and Stop action. |
+| Markdown copy + link | Adds whole-chat Copy and a lazy local a.shel.sh Markdown-link action. |
+| Vision resize recovery | On an image-dimension `ValueError`, retries the request with browser-only projections reduced by exactly 128 pixels on the longest side until accepted. Stored originals never change. |
+| Stable streaming scroll | Follows output only while near the bottom and preserves reasoning/tool disclosure state and inner scroll positions. |
+| Context meter | Shows a per-session token estimate against the model-advertised or manually entered context window. |
+| Lossless context controls | Enables Soft Firecrawl indexing and user-selected Normal summarization. Exact originals stay stored and can be restored or reapplied. |
+| Browser read tools | Lets the model read exact transcript/reasoning entries, resources, instructions, and editor documents. |
+| Hashline write tools | Adds read-before-write, revisioned document and `instructions.md` PUT operations with hashline patches, diffs, and diagnostics. |
+| TODO tool | Adds a visible per-chat checklist that the model and user can update. |
+| Undo deleted turns | Keeps the last 20 deleted turn groups in a browser-local undo stack. |
+
+**Enable all** and **Disable all** apply the entire matrix. Parallel chats cannot be disabled while another session is still generating; stop that background request first so its Stop control never becomes unreachable.
 
 ## Attachments
 
@@ -48,6 +70,12 @@ The complete workspace export retains original attachment data URLs as well as c
 ## Browser tools
 
 Tools are translated into OpenAI function definitions and exposed only when enabled. Calls and results remain visible in the transcript. The default approval mode asks before every invocation; **Allow enabled tools** is an explicit session-wide opt-in. Tool continuation stops at the configured round limit (1–16, default 8).
+
+### Browser workspace
+
+The opt-in browser workspace stores documents, `instructions.md`, TODOs, revisions, diffs, and lint diagnostics inside the current chat. Existing documents must be read at their current revision before the model may write them. A write can replace the document or target stable per-line hashes; stale, ambiguous, overlapping, or unread edits fail explicitly. Each accepted write creates an immutable browser-local revision that can be compared as red/green lines.
+
+The context-read tool can reopen the exact content or reasoning of a stored turn. Long Firecrawl results are split losslessly into ordered Markdown sections only when Lossless context controls is enabled; the model initially receives an index plus section one and may open later sections individually.
 
 ### Local OCR
 
@@ -94,6 +122,9 @@ MCP tools can be more privileged than this page. Approval controls whether the h
 - A response interrupted by refresh is recovered as **stopped**, never left permanently **streaming**.
 - Images are sent as base64 data URLs to the configured model endpoint. Converted non-image files are sent as text/Markdown. OCR and conversion stay local unless their resulting text is later included in a model request.
 - No service worker, analytics beacon, cookies, credential store, or remote asset CDN is used.
+- Compaction never deletes or overwrites a turn. Normal compaction adds a stateless model-generated summary projection; Soft compaction indexes Firecrawl output. The native entries, reasoning, resources, and revision history remain in the exported workspace.
+- Vision retries alter only the outbound in-memory image projection. The exact attached data URL remains in IndexedDB and state exports.
+- Rich renderer and a.shel.sh compression modules are vendored and loaded only after their feature is used.
 
 ## Develop and verify
 
@@ -103,7 +134,7 @@ bun run check
 bun run test:browser
 ```
 
-`bun run check` runs the unit suite, bundles the browser module graph in memory, verifies every required DOM id, verifies vendored files, and initializes the real AnyDoc WASM build for an in-memory RTF conversion.
+`bun run check` runs the unit suite, bundles the browser module graph in memory, verifies every required DOM id and the all-disabled baseline controls, verifies vendored files, and initializes the real AnyDoc WASM build for an in-memory RTF conversion.
 
 `bun run test:browser` serves the page at `http://127.0.0.1:4273/` and a deterministic fixture at `http://127.0.0.1:4274/` with OpenAI `/v1`, Firecrawl `/v2`, and MCP `/mcp` surfaces. The ports can be changed with `LLM_FIXTURE_PAGE_PORT` and `LLM_FIXTURE_API_PORT`. Stop it with `Ctrl+C`.
 
@@ -114,10 +145,14 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for data flow and invariants, and [THIR
 - `src/app.js` — UI state, persistence triggers, model/tool loop, imports/exports.
 - `src/workspace.js` — versioned multi-session workspace normalization.
 - `src/transcript.js` — message contract, OpenAI projection, conversation interchange.
+- `src/context.js` — token estimates, exact resource sections, compaction envelopes, and timelines.
+- `src/documents.js` — hashline documents, read-before-write revisions, diffs, and diagnostics.
+- `src/image-retry.js` — browser-only 128-pixel image projection retries.
+- `src/share.js`, `src/lnkr/` — lazy a.shel.sh Markdown-link encoding.
 - `src/storage.js` — IndexedDB and serialized debounced writes.
 - `src/openai.js` — model discovery, SSE framing, streaming/non-streaming aggregation.
 - `src/attachments.js` — file classification and persistent attachment preparation.
 - `src/anydoc.js`, `src/archive.js`, `src/ocr.js` — local document, ZIP, and OCR pipelines.
 - `src/firecrawl.js`, `src/mcp.js`, `src/tools.js` — browser tool adapters and dispatch.
 - `src/local-endpoint.js` — local/private endpoint validation and normalization.
-- `src/markdown.js` — DOM-native response rendering and clipboard actions.
+- `src/markdown.js` — baseline DOM-native Markdown plus opt-in lazy rich rendering.
