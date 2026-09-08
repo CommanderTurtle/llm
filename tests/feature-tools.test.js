@@ -24,6 +24,10 @@ test("the complete local feature tool set is explicit", () => {
     "instructions_put",
     "todo_update",
   ]);
+  const put = openAiTools(integrations).find((tool) => tool.function.name === "put_document").function;
+  assert.match(put.description, /DONE alone on the final line/);
+  assert.match(put.description, /Do not JSON-escape/);
+  assert.equal(put.parameters.properties.from_response.const, true);
 });
 
 test("vision retry only recognizes image-dimension ValueErrors", () => {
@@ -49,7 +53,7 @@ test("a forged call cannot execute an opt-in browser tool while it is disabled",
 });
 
 test("scraped image and resource search tools appear only for eligible browser-local resources", () => {
-  const integrations = createWorkspace({ integrations: { features: { readTools: true } } }).integrations;
+  const integrations = createWorkspace({ integrations: { features: { readTools: true, imageReads: true } } }).integrations;
   const resource = createContextResource("# Result\n\n![Diagram](https://images.example/diagram.webp)", {
     id: "resource-1",
     sourceUrl: "https://source.example/report",
@@ -73,7 +77,7 @@ test("scraped image and resource search tools appear only for eligible browser-l
 });
 
 test("view_image cannot be forged without an eligible indexed resource", async () => {
-  const integrations = createWorkspace({ integrations: { features: { readTools: true } } }).integrations;
+  const integrations = createWorkspace({ integrations: { features: { imageReads: true } } }).integrations;
   const resource = createContextResource("![Allowed](https://images.example/allowed.png)", { id: "resource-1" });
   await assert.rejects(() => executeTool({
     function: { name: "view_image", arguments: JSON.stringify({ resource_id: resource.id, section: 1, url: "https://images.example/elsewhere.png" }) },

@@ -135,8 +135,23 @@ function handleCompletion(body, response) {
     ]);
     return;
   }
+  if (prompt.includes("long stream fixture")) {
+    const chunks = Array.from({ length: 80 }, (_, index) => ({
+      id: "fixture-long-stream",
+      model: body.model,
+      choices: [{ delta: { reasoning_content: `Reasoning segment ${index + 1}: ${"fixture ".repeat(12)}\n` } }],
+    }));
+    chunks.push(
+      { id: "fixture-long-stream", model: body.model, choices: [{ delta: { content: "Long stream fixture complete." } }] },
+      { id: "fixture-long-stream", model: body.model, choices: [{ delta: {}, finish_reason: "stop" }], usage: { total_tokens: 640 } },
+    );
+    streamedCompletion(response, chunks, { delay: 50 });
+    return;
+  }
   const availableTools = Array.isArray(body.tools) ? body.tools : [];
-  const requestedTool = prompt.includes("view image fixture")
+  const requestedTool = prompt.includes("draft document fixture")
+    ? availableTools.find((tool) => tool?.function?.name === "put_document")
+    : prompt.includes("view image fixture")
     ? availableTools.find((tool) => tool?.function?.name === "view_image")
     : prompt.includes("read resource fixture")
       ? availableTools.find((tool) => tool?.function?.name === "context_read")
@@ -152,18 +167,23 @@ function handleCompletion(body, response) {
         ? availableTools.find((tool) => tool?.function?.name?.startsWith("mcp_"))
         : null;
   if (requestedTool) {
+    const callId = `fixture-call-${requestedTool.function.name}`;
     const imageName = userText.match(/<image_attachment\b[^>]*\bname="([^"]+)"/)?.[1] ?? "ocr.svg";
     const resourceId = availableTools.find((tool) => tool?.function?.name === "view_image")
       ?.function?.parameters?.properties?.resource_id?.enum?.[0];
     const args = requestedTool.function.name === "web_search"
       ? { query: "fixture query", limit: 1 }
       : requestedTool.function.name === "web_scrape" ? { url: "https://example.test/long" }
+      : requestedTool.function.name === "put_document" ? { name: "fixture-notes.md", language: "markdown", from_response: true }
       : requestedTool.function.name === "view_image" ? { resource_id: resourceId, section: 1, url: `http://127.0.0.1:${apiPort}/fixture-image.svg` }
       : requestedTool.function.name === "context_read" ? { kind: "resource", id: resourceId, section: 1 }
       : requestedTool.function.name === "resource_search" ? { resource_id: requestedTool.function.parameters.properties.resource_id.enum[0], query: "fixture paragraph" }
       : requestedTool.function.name === "ocr_attachment" ? { attachment: imageName } : { value: "hello" };
     streamedCompletion(response, [
-      { id: "fixture-tool", model: body.model, choices: [{ delta: { tool_calls: [{ index: 0, id: "fixture-call-1", type: "function", function: { name: requestedTool.function.name, arguments: JSON.stringify(args).slice(0, 8) } }] } }] },
+      ...(requestedTool.function.name === "put_document" ? [
+        { id: "fixture-tool", model: body.model, choices: [{ delta: { content: "# Fixture document\n\nStored from ordinary assistant Markdown.\nDONE" } }] },
+      ] : []),
+      { id: "fixture-tool", model: body.model, choices: [{ delta: { tool_calls: [{ index: 0, id: callId, type: "function", function: { name: requestedTool.function.name, arguments: JSON.stringify(args).slice(0, 8) } }] } }] },
       { id: "fixture-tool", model: body.model, choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args).slice(8) } }] } }] },
       { id: "fixture-tool", model: body.model, choices: [{ delta: {}, finish_reason: "tool_calls" }] },
     ]);

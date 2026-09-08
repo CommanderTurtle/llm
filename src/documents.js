@@ -179,6 +179,17 @@ export function hashlineDocument(documentValue) {
   ].join("\n");
 }
 
+export function documentDraftFromResponse(value) {
+  const source = String(value ?? "").replace(/\r\n?/g, "\n");
+  const match = source.match(/(?:^|\n)DONE[ \t]*$/);
+  if (!match) throw new Error("Response-backed PUT requires a final line containing only DONE.");
+  // The matched newline is the DONE delimiter. Preserve everything before it,
+  // including an intentional trailing blank line in the document itself.
+  const content = source.slice(0, match.index);
+  if (!content.trim()) throw new Error("Response-backed PUT did not contain document text before DONE.");
+  return content;
+}
+
 function findHash(lines, hash, startAt = 0) {
   const matches = [];
   for (let index = startAt; index < lines.length; index += 1) if (lineHash(lines[index]) === hash) matches.push(index);

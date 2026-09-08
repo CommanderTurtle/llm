@@ -1,6 +1,8 @@
 import { formatAttachmentSize, prepareAttachment } from "./attachments.js";
 import {
   compactionEnvelope,
+  compactionEnvelopes,
+  compactionSearchTerms,
   createContextResource,
   markResourceSectionRead,
   resourceIndex,
@@ -15,6 +17,7 @@ import {
 import {
   createBrowserDocument,
   diffRevision,
+  documentDraftFromResponse,
   hashlineDocument,
   languageFromName,
   lintDocument,
@@ -112,6 +115,7 @@ const elements = {
   shareMarkdown: document.querySelector("#share-markdown"),
   undo: document.querySelector("#undo"),
   openWorkspace: document.querySelector("#open-workspace"),
+  openNavigator: document.querySelector("#open-navigator"),
   contextMeter: document.querySelector("#context-meter"),
   contextRing: document.querySelector("#context-ring"),
   contextPercent: document.querySelector("#context-percent"),
@@ -131,7 +135,10 @@ const elements = {
   featureStableScroll: document.querySelector("#feature-stable-scroll"),
   featureContextMeter: document.querySelector("#feature-context-meter"),
   featureCompaction: document.querySelector("#feature-compaction"),
+  featureImageReads: document.querySelector("#feature-image-reads"),
   featureUndoDelete: document.querySelector("#feature-undo-delete"),
+  featureTurnControls: document.querySelector("#feature-turn-controls"),
+  featureTranscriptNavigator: document.querySelector("#feature-transcript-navigator"),
   featureEnableAll: document.querySelector("#feature-enable-all"),
   featureDisableAll: document.querySelector("#feature-disable-all"),
   firecrawlEnabled: document.querySelector("#firecrawl-enabled"),
@@ -144,6 +151,8 @@ const elements = {
   addMcp: document.querySelector("#add-mcp"),
   mcpList: document.querySelector("#mcp-list"),
   editDialog: document.querySelector("#edit-dialog"),
+  editDialogTitle: document.querySelector("#edit-dialog-title"),
+  editDialogHint: document.querySelector("#edit-dialog-hint"),
   editContent: document.querySelector("#edit-content"),
   saveEdit: document.querySelector("#save-edit"),
   toolDialog: document.querySelector("#tool-dialog"),
@@ -153,14 +162,19 @@ const elements = {
   contextDialog: document.querySelector("#context-dialog"),
   contextDetail: document.querySelector("#context-detail"),
   contextTimeline: document.querySelector("#context-timeline"),
+  transcriptSearchSection: document.querySelector("#transcript-search-section"),
+  transcriptSearch: document.querySelector("#transcript-search"),
+  transcriptSearchResults: document.querySelector("#transcript-search-results"),
   compactionControls: document.querySelector("#compaction-controls"),
   compactSoft: document.querySelector("#compact-soft"),
+  compactContextReads: document.querySelector("#compact-context-reads"),
   compactNormal: document.querySelector("#compact-normal"),
   restoreContext: document.querySelector("#restore-context"),
   compactionPrompt: document.querySelector("#compaction-prompt"),
   compactionMessages: document.querySelector("#compaction-messages"),
   activeCompaction: document.querySelector("#active-compaction"),
   selectOlderContext: document.querySelector("#select-older-context"),
+  clearContextSelection: document.querySelector("#clear-context-selection"),
   closeContext: document.querySelector("#close-context"),
   workspaceDialog: document.querySelector("#workspace-dialog"),
   closeWorkspace: document.querySelector("#close-workspace"),
@@ -168,6 +182,7 @@ const elements = {
   todoWorkspaceSection: document.querySelector("#todo-workspace-section"),
   todoInput: document.querySelector("#todo-input"),
   addTodo: document.querySelector("#add-todo"),
+  clearTodosExceptRecent: document.querySelector("#clear-todos-except-recent"),
   documentSelect: document.querySelector("#document-select"),
   newDocument: document.querySelector("#new-document"),
   openInstructions: document.querySelector("#open-instructions"),
@@ -195,7 +210,7 @@ const state = {
   renderTarget: null,
   lastContextRenderAt: 0,
   toastTimer: 0,
-  editMessageId: "",
+  editTarget: null,
   mcpConnections: new Map(),
   mcpStatus: new Map(),
   storageReady: false,
@@ -214,20 +229,46 @@ const featureControls = {
   stableScroll: elements.featureStableScroll,
   contextMeter: elements.featureContextMeter,
   compaction: elements.featureCompaction,
+  imageReads: elements.featureImageReads,
   readTools: elements.readToolsEnabled,
   writeTools: elements.writeToolsEnabled,
   todoTool: elements.todoToolsEnabled,
   undoDelete: elements.featureUndoDelete,
+  turnControls: elements.featureTurnControls,
+  transcriptNavigator: elements.featureTranscriptNavigator,
 };
 
 function featureEnabled(name) {
   return state.workspace.integrations.features?.[name] === true;
 }
 
+function hydrateScrapedImageResources(current) {
+  current.resources ??= [];
+  for (const message of current.messages ?? []) {
+    if (message.role !== "tool" || !["web_search", "web_scrape"].includes(message.name) || !message.content.trim()) continue;
+    if (message.meta?.resourceId && current.resources.some((resource) => resource.id === message.meta.resourceId)) continue;
+    const request = current.messages.find((candidate) => candidate.toolCalls?.some((call) => call.id === message.toolCallId));
+    const call = request?.toolCalls?.find((candidate) => candidate.id === message.toolCallId);
+    let args = {};
+    try { args = parseToolArguments(call?.function?.arguments); } catch { /* The stored result remains usable without request metadata. */ }
+    const label = message.content.match(/^#{1,6}\s+(.+)$/m)?.[1] || "result";
+    const resource = createContextResource(message.content, {
+      kind: message.name === "web_scrape" ? "firecrawl-scrape" : "firecrawl-search",
+      name: message.name === "web_scrape" ? `Scrape: ${args.url || label}` : `Search: ${args.query || label}`,
+      sourceTool: message.name,
+      ...(message.name === "web_scrape" && args.url ? { sourceUrl: args.url } : {}),
+    });
+    if (!resource.sectionMeta.some((section) => section.images.length)) continue;
+    current.resources.push(resource);
+    message.meta = { ...message.meta, resourceId: resource.id };
+  }
+}
+
 function deriveLocalTools() {
   const features = state.workspace.integrations.features;
   state.workspace.integrations.localTools = {
     context: features.readTools || features.compaction,
+    images: features.imageReads,
     read: features.readTools,
     write: features.readTools && features.writeTools,
     todos: features.todoTool,
@@ -335,6 +376,7 @@ function writeIntegrations() {
   elements.ocrEnabled.checked = integrations.ocr.enabled;
   for (const key of FEATURE_KEYS) featureControls[key].checked = integrations.features[key];
   deriveLocalTools();
+  if (integrations.features.imageReads) for (const current of state.workspace.sessions) hydrateScrapedImageResources(current);
   elements.firecrawlEnabled.checked = integrations.firecrawl.enabled;
   elements.firecrawlUrl.value = integrations.firecrawl.url;
   elements.firecrawlLimit.value = String(integrations.firecrawl.limit);
@@ -349,10 +391,12 @@ function applyFeatureVisibility() {
   elements.shareMarkdown.hidden = !featureEnabled("markdownActions");
   elements.undo.hidden = !featureEnabled("undoDelete");
   elements.openWorkspace.hidden = !hasWorkspace;
+  elements.openNavigator.hidden = !featureEnabled("transcriptNavigator");
   elements.contextMeter.hidden = !hasContext;
   elements.contextWindowLabel.hidden = !hasContext;
   elements.contextWindow.hidden = !hasContext;
   elements.compactionControls.hidden = !featureEnabled("compaction");
+  elements.transcriptSearchSection.hidden = !featureEnabled("transcriptNavigator");
   elements.todoWorkspaceSection.hidden = !featureEnabled("todoTool");
   elements.documentWorkspaceSection.hidden = !(featureEnabled("readTools") || featureEnabled("writeTools"));
   elements.maxTokens.disabled = featureEnabled("autoMaxTokens");
@@ -609,6 +653,92 @@ function scrapedImageCard(message) {
   return figure;
 }
 
+function disclosureButton(label, action, className = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  if (className) button.className = className;
+  button.addEventListener("click", action);
+  return button;
+}
+
+function reasoningDisclosure(message) {
+  const details = document.createElement("details");
+  details.className = "reasoning";
+  details.dataset.viewKey = "reasoning";
+  details.open = message.state === "streaming" && !message.content;
+  const summary = document.createElement("summary");
+  summary.textContent = `Reasoning · ${message.reasoning.length.toLocaleString()} characters`;
+  const pre = document.createElement("pre");
+  pre.textContent = message.reasoning;
+  details.append(summary);
+  if (featureEnabled("turnControls") && message.state !== "streaming") {
+    const actions = document.createElement("div");
+    actions.className = "disclosure-actions";
+    actions.append(
+      disclosureButton("Copy reasoning", async () => {
+        try { await copyText(message.reasoning); toast("Reasoning copied"); }
+        catch (error) { toast(error instanceof Error ? error.message : "Copy failed"); }
+      }),
+      disclosureButton("Edit reasoning", () => openEdit(message.id, "reasoning")),
+    );
+    details.append(actions);
+  }
+  details.append(pre);
+  return details;
+}
+
+function toolCallText(call) {
+  try {
+    return JSON.stringify({ name: call.function.name, arguments: parseToolArguments(call.function.arguments) }, null, 2);
+  } catch {
+    return JSON.stringify({ name: call.function.name, arguments: call.function.arguments }, null, 2);
+  }
+}
+
+function toolCallDisclosure(message, call, callIndex) {
+  const details = document.createElement("details");
+  details.className = "tool-call";
+  details.dataset.viewKey = `tool-${callIndex}`;
+  const summary = document.createElement("summary");
+  summary.textContent = `Tool request · ${call.function.name || "pending"}`;
+  const pre = document.createElement("pre");
+  pre.textContent = toolCallText(call);
+  details.append(summary);
+  if (featureEnabled("turnControls") && message.state !== "streaming") {
+    const actions = document.createElement("div");
+    actions.className = "disclosure-actions";
+    actions.append(
+      disclosureButton("Copy request", async () => {
+        try { await copyText(pre.textContent); toast("Tool request copied"); }
+        catch (error) { toast(error instanceof Error ? error.message : "Copy failed"); }
+      }),
+      disclosureButton("Edit request", () => openEdit(message.id, "tool", callIndex)),
+      disclosureButton("Delete request", () => deleteToolCall(message.id, callIndex), "danger"),
+    );
+    details.append(actions);
+  }
+  details.append(pre);
+  return details;
+}
+
+function latestContinuableAssistant(current) {
+  const index = current.messages.findLastIndex((message) => message.role === "assistant");
+  if (index < 0) return null;
+  if (current.messages.slice(index + 1).some((message) => message.role === "user" || message.role === "assistant")) return null;
+  return current.messages[index];
+}
+
+function updatePreformattedText(pre, value) {
+  if (pre.textContent === value) return;
+  const scrollTop = pre.scrollTop;
+  const scrollLeft = pre.scrollLeft;
+  const followsTail = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 48;
+  pre.textContent = value;
+  pre.scrollLeft = scrollLeft;
+  pre.scrollTop = followsTail ? pre.scrollHeight : scrollTop;
+}
+
 function renderMessage(message) {
   const current = session();
   const attachmentMap = new Map(current.attachments.map((item) => [item.id, item]));
@@ -620,6 +750,11 @@ function renderMessage(message) {
   article.dataset.messageId = message.id;
   article.dataset.role = message.role;
   article.dataset.state = message.state;
+  const compaction = activeCompactionsFor(current).find((item) => item.messageIds.includes(message.id));
+  if (compaction) {
+    article.dataset.compactionId = compaction.id;
+    article.style.setProperty("--compaction-color", compactionColor(compaction));
+  }
 
   const header = document.createElement("header");
   header.className = "message-header";
@@ -627,6 +762,7 @@ function renderMessage(message) {
   role.className = "message-role";
   role.textContent = message.role === "tool" ? `tool${message.name ? ` · ${message.name}` : ""}` : message.role;
   const metadata = document.createElement("span");
+  metadata.className = "message-meta";
   metadata.textContent = messageMeta(message);
   const actions = document.createElement("span");
   actions.className = "message-actions";
@@ -643,8 +779,8 @@ function renderMessage(message) {
 
   if (featureEnabled("streamRecovery")
       && message.role === "assistant"
-      && message.state === "interrupted"
-      && current.messages.at(-1)?.id === message.id) {
+      && message.state !== "streaming"
+      && latestContinuableAssistant(current)?.id === message.id) {
     const resume = document.createElement("button");
     resume.type = "button";
     resume.textContent = "Continue";
@@ -652,7 +788,8 @@ function renderMessage(message) {
     actions.append(resume);
   }
 
-  if ((message.role === "user" || message.role === "assistant") && message.state !== "streaming") {
+  if ((message.role === "user" || message.role === "assistant" || (message.role === "tool" && featureEnabled("turnControls")))
+      && message.state !== "streaming") {
     const edit = document.createElement("button");
     edit.type = "button";
     edit.textContent = "Edit";
@@ -670,30 +807,10 @@ function renderMessage(message) {
   header.append(role, metadata, actions);
   article.append(header);
 
-  if (message.reasoning) {
-    const details = document.createElement("details");
-    details.className = "reasoning";
-    details.dataset.viewKey = "reasoning";
-    details.open = message.state === "streaming" && !message.content;
-    const summary = document.createElement("summary");
-    summary.textContent = `Reasoning · ${message.reasoning.length.toLocaleString()} characters`;
-    const pre = document.createElement("pre");
-    pre.textContent = message.reasoning;
-    details.append(summary, pre);
-    article.append(details);
-  }
+  if (message.reasoning) article.append(reasoningDisclosure(message));
 
   for (const [callIndex, call] of (message.toolCalls ?? []).entries()) {
-    const details = document.createElement("details");
-    details.className = "tool-call";
-    details.dataset.viewKey = `tool-${callIndex}`;
-    const summary = document.createElement("summary");
-    summary.textContent = `Tool request · ${call.function.name || "pending"}`;
-    const pre = document.createElement("pre");
-    try { pre.textContent = JSON.stringify(parseToolArguments(call.function.arguments), null, 2); }
-    catch { pre.textContent = call.function.arguments; }
-    details.append(summary, pre);
-    article.append(details);
+    article.append(toolCallDisclosure(message, call, callIndex));
   }
 
   const body = document.createElement("div");
@@ -701,7 +818,12 @@ function renderMessage(message) {
   if (resource?.sections.length === 1) body.id = resourceSectionAnchor(resource.id, 0);
   const displayedContent = resource ? resourceIndex(resource) : message.content;
   if (displayedContent) {
-    if (message.role === "assistant" || message.role === "tool") {
+    if (message.state === "streaming") {
+      const streaming = document.createElement("p");
+      streaming.className = "streaming-content";
+      streaming.textContent = displayedContent;
+      body.append(streaming);
+    } else if (message.role === "assistant" || message.role === "tool") {
       body.append(renderMarkdown(displayedContent, {
         rich: featureEnabled("richMarkdown") && message.state !== "streaming",
         diagrams: message.state !== "streaming",
@@ -719,9 +841,17 @@ function renderMessage(message) {
     waiting.textContent = message.reasoning ? "Waiting for final answer…" : message.toolCalls?.length ? "Preparing tool call…" : "Waiting for model…";
     body.append(waiting);
   }
-  article.append(body);
+  if (message.role === "tool" && message.name === CONTEXT_TOOL_NAME && message.state !== "streaming") {
+    const disclosure = document.createElement("details");
+    disclosure.className = "context-read";
+    disclosure.dataset.viewKey = "context-read";
+    const summary = document.createElement("summary");
+    summary.textContent = `Context read · ${message.content.length.toLocaleString()} characters`;
+    disclosure.append(summary, body);
+    article.append(disclosure);
+  } else article.append(body);
 
-  const viewedImage = state.workspace.integrations.localTools.context ? scrapedImageCard(message) : null;
+  const viewedImage = state.workspace.integrations.localTools.images ? scrapedImageCard(message) : null;
   if (viewedImage) article.append(viewedImage);
 
   if (resource && resource.sections.length > 1) {
@@ -762,6 +892,52 @@ function renderMessage(message) {
   return article;
 }
 
+function compactionColor(compaction) {
+  let hash = 2166136261;
+  for (const character of String(compaction.id)) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return `hsl(${hash % 360} 72% 62%)`;
+}
+
+function renderCompactionSummary(compaction) {
+  const article = document.createElement("article");
+  article.className = "message compaction-summary";
+  article.dataset.compactionSummary = compaction.id;
+  article.style.setProperty("--compaction-color", compactionColor(compaction));
+  const header = document.createElement("header");
+  header.className = "message-header";
+  const role = document.createElement("span");
+  role.className = "message-role";
+  role.textContent = compaction.mode === "soft" ? "Soft context index" : "Normal context summary";
+  const metadata = document.createElement("span");
+  metadata.textContent = `${compaction.messageIds.length} original entries · ${compaction.id}`;
+  const actions = document.createElement("span");
+  actions.className = "message-actions";
+  actions.append(disclosureButton("Restore group", () => restoreCompaction(compaction.id)));
+  header.append(role, metadata, actions);
+  const body = document.createElement("div");
+  body.className = "message-body";
+  body.append(renderMarkdown(compaction.summary, {
+    rich: featureEnabled("richMarkdown"),
+    diagrams: false,
+    onCopy: (ok, error) => toast(ok ? "Code copied" : error?.message ?? "Copy failed"),
+  }));
+  if (compaction.searchTerms?.length) {
+    const search = document.createElement("details");
+    search.className = "compaction-search-values";
+    const summary = document.createElement("summary");
+    summary.textContent = `${compaction.searchTerms.length} searchable values`;
+    const terms = document.createElement("p");
+    terms.textContent = compaction.searchTerms.join(", ");
+    search.append(summary, terms);
+    body.append(search);
+  }
+  article.append(header, body);
+  return article;
+}
+
 function renderMessages() {
   if (state.renderTimer) window.clearTimeout(state.renderTimer);
   if (state.renderFrame) window.cancelAnimationFrame(state.renderFrame);
@@ -794,7 +970,19 @@ function renderMessages() {
     fragment.append(elements.empty);
   } else {
     elements.empty.hidden = true;
-    for (const message of current.messages) fragment.append(renderMessage(message));
+    const summariesAt = new Map();
+    for (const compaction of activeCompactionsFor(current)) {
+      const indexes = compaction.messageIds.map((id) => current.messages.findIndex((message) => message.id === id)).filter((index) => index >= 0);
+      if (!indexes.length) continue;
+      const last = Math.max(...indexes);
+      const list = summariesAt.get(last) ?? [];
+      list.push(compaction);
+      summariesAt.set(last, list);
+    }
+    current.messages.forEach((message, index) => {
+      fragment.append(renderMessage(message));
+      for (const compaction of summariesAt.get(index) ?? []) fragment.append(renderCompactionSummary(compaction));
+    });
   }
   elements.messages.replaceChildren(fragment);
   if (preserveScroll) {
@@ -818,13 +1006,21 @@ function renderMessages() {
   }
 }
 
+function activeCompactionsFor(current) {
+  if (!featureEnabled("compaction")) return [];
+  return (current.compactions ?? []).filter((item) => item.active);
+}
+
 function activeCompactionFor(current) {
-  if (!featureEnabled("compaction")) return null;
-  return (current.compactions ?? []).find((item) => item.id === current.activeCompactionId && item.active) ?? null;
+  return activeCompactionsFor(current).at(-1) ?? null;
+}
+
+function compactedMessageIds(current) {
+  return new Set(activeCompactionsFor(current).flatMap((item) => item.messageIds ?? []));
 }
 
 function projectionOptions(current, imageOverrides = new Map(), reasoningMessageIds = new Set()) {
-  const compaction = activeCompactionFor(current);
+  const compactions = activeCompactionsFor(current);
   const resourceIndexes = featureEnabled("compaction")
     ? new Map((current.resources ?? []).map((resource) => [resource.id, resourceIndex(resource)]))
     : new Map();
@@ -832,8 +1028,8 @@ function projectionOptions(current, imageOverrides = new Map(), reasoningMessage
     imageOverrides,
     resourceIndexes,
     reasoningMessageIds,
-    compactedMessageIds: compaction?.messageIds ?? [],
-    compactionEnvelope: compactionEnvelope(compaction, current.messages),
+    compactedMessageIds: [...new Set(compactions.flatMap((item) => item.messageIds ?? []))],
+    compactionEnvelope: compactionEnvelopes(compactions, current.messages),
     preserveToolReasoning: featureEnabled("streamRecovery"),
   };
 }
@@ -854,7 +1050,6 @@ function renderContextMeter() {
 
 function maybeOfferCompaction(current) {
   if (!featureEnabled("compaction")) return;
-  if (activeCompactionFor(current)) return;
   const stats = sessionContextStats(current, projectedMessages(current));
   if (stats.percent < 80 || current.contextOfferAt === current.messages.length) return;
   current.contextOfferAt = current.messages.length;
@@ -872,29 +1067,53 @@ function renderStreamingMessage(target) {
   const preserveScroll = featureEnabled("stableScroll");
   const follow = preserveScroll ? distance < 140 : true;
   const previousScrollTop = elements.messages.scrollTop;
-  const disclosureState = new Map();
-  if (preserveScroll) {
-    for (const details of existing.querySelectorAll("details[data-view-key]")) {
-      const pre = details.querySelector("pre");
-      disclosureState.set(details.dataset.viewKey, {
-        open: details.open,
-        scrollTop: pre?.scrollTop ?? 0,
-        scrollLeft: pre?.scrollLeft ?? 0,
-      });
+  existing.dataset.state = message.state;
+  const metadata = existing.querySelector(".message-meta");
+  if (metadata) metadata.textContent = messageMeta(message);
+  const body = existing.querySelector(":scope > .message-body");
+
+  if (message.reasoning) {
+    let details = existing.querySelector('details[data-view-key="reasoning"]');
+    if (!details) {
+      details = reasoningDisclosure(message);
+      existing.insertBefore(details, body);
+    } else {
+      details.querySelector("summary").textContent = `Reasoning · ${message.reasoning.length.toLocaleString()} characters`;
+      updatePreformattedText(details.querySelector("pre"), message.reasoning);
     }
   }
 
-  const replacement = renderMessage(message);
-  existing.replaceWith(replacement);
-  if (preserveScroll) {
-    for (const details of replacement.querySelectorAll("details[data-view-key]")) {
-      const saved = disclosureState.get(details.dataset.viewKey);
-      if (!saved) continue;
-      details.open = saved.open;
-      const pre = details.querySelector("pre");
-      if (pre) { pre.scrollTop = saved.scrollTop; pre.scrollLeft = saved.scrollLeft; }
+  for (const [callIndex, call] of (message.toolCalls ?? []).entries()) {
+    let details = existing.querySelector(`details[data-view-key="tool-${callIndex}"]`);
+    if (!details) {
+      details = toolCallDisclosure(message, call, callIndex);
+      existing.insertBefore(details, body);
+      continue;
     }
+    details.querySelector("summary").textContent = `Tool request · ${call.function.name || "pending"}`;
+    let argumentsText;
+    argumentsText = toolCallText(call);
+    updatePreformattedText(details.querySelector("pre"), argumentsText);
   }
+
+  if (message.content) {
+    let streaming = body.querySelector(".streaming-content");
+    if (!streaming) {
+      streaming = document.createElement("p");
+      streaming.className = "streaming-content";
+      body.replaceChildren(streaming);
+    }
+    if (streaming.textContent !== message.content) streaming.textContent = message.content;
+  } else {
+    let waiting = body.querySelector(".hint");
+    if (!waiting) {
+      waiting = document.createElement("p");
+      waiting.className = "hint";
+      body.replaceChildren(waiting);
+    }
+    waiting.textContent = message.reasoning ? "Waiting for final answer…" : message.toolCalls?.length ? "Preparing tool call…" : "Waiting for model…";
+  }
+
   if (follow) elements.messages.scrollTop = elements.messages.scrollHeight;
   else elements.messages.scrollTop = previousScrollTop;
 
@@ -1070,7 +1289,11 @@ function requestBody(model, messages, parameters, tools) {
 function resourceImageSelection(current, args) {
   const resource = current.resources.find((item) => item.id === args.resource_id);
   if (!resource) throw new Error(`Resource ${args.resource_id || "(missing id)"} was not found.`);
-  const sectionNumber = Math.trunc(Number(args.section));
+  let sectionNumber = Math.trunc(Number(args.section));
+  if (!sectionNumber && typeof args.url === "string") {
+    const located = resource.sections.findIndex((_section, index) => resourceSectionImage(resource, index, args.url));
+    if (located >= 0) sectionNumber = located + 1;
+  }
   if (sectionNumber < 1 || sectionNumber > resource.sections.length) {
     throw new Error(`Resource ${resource.id} has sections 1-${resource.sections.length}.`);
   }
@@ -1156,7 +1379,15 @@ function findDocument(current, name) {
   return current.documents.find((item) => item.name.toLowerCase() === normalized) ?? null;
 }
 
-function executeBrowserTool(current, name, args) {
+function responseDocumentDraft(current, call) {
+  const request = [...current.messages].reverse().find((message) => (
+    message.role === "assistant" && message.toolCalls?.some((candidate) => candidate.id === call?.id)
+  ));
+  if (!request) throw new Error("The response-backed PUT could not locate its assistant tool-call turn.");
+  return documentDraftFromResponse(request.content);
+}
+
+function executeBrowserTool(current, name, args, call = null) {
   if (name === VIEW_IMAGE_TOOL_NAME) {
     const selected = resourceImageSelection(current, args);
     return {
@@ -1252,8 +1483,11 @@ function executeBrowserTool(current, name, args) {
   if (name === PUT_DOCUMENT_TOOL_NAME || name === PUT_INSTRUCTIONS_TOOL_NAME) {
     const documentName = instructions ? "instructions.md" : args.name;
     if (!String(documentName || "").trim()) throw new Error("put_document requires a document name.");
+    const writeArgs = args.from_response === true
+      ? { ...args, content: responseDocumentDraft(current, call) }
+      : args;
     const existing = findDocument(current, documentName);
-    const next = putBrowserDocument(existing, { ...args, name: documentName }, {
+    const next = putBrowserDocument(existing, { ...writeArgs, name: documentName }, {
       readRevision: existing ? state.readReceipts.get(receiptKey(current, existing)) : null,
       actor: "model",
     });
@@ -1288,10 +1522,21 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
         role: "user",
         content: "Continue exactly where the interrupted response ended. Do not repeat completed text. Finish the answer or intended tool action.",
       });
-      currentAssistant = continuationTarget;
-      currentAssistant.state = "streaming";
-      currentAssistant.error = "";
-      currentAssistant.meta = { ...currentAssistant.meta, resumed: (currentAssistant.meta?.resumed ?? 0) + 1 };
+      const canAppend = !continuationTarget.toolCalls?.length
+        && current.messages.at(-1)?.id === continuationTarget.id
+        && ["interrupted", "stopped"].includes(continuationTarget.state);
+      if (canAppend) {
+        currentAssistant = continuationTarget;
+        currentAssistant.state = "streaming";
+        currentAssistant.error = "";
+        currentAssistant.meta = { ...currentAssistant.meta, resumed: (currentAssistant.meta?.resumed ?? 0) + 1 };
+      } else {
+        currentAssistant = createMessage("assistant", "", {
+          state: "streaming",
+          meta: { model, continuationOf: continuationTarget.id },
+        });
+        current.messages.push(currentAssistant);
+      }
       continuationTarget = null;
     } else {
       currentAssistant = createMessage("assistant", "", { state: "streaming", meta: { model } });
@@ -1328,7 +1573,7 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
         } catch (error) {
           const hasPartial = Boolean(currentAssistant.content || currentAssistant.reasoning || currentAssistant.toolCalls.length);
           if (featureEnabled("visionRetry") && !hasPartial && isImageSizeError(error)) {
-            const compacted = new Set(activeCompactionFor(current)?.messageIds ?? []);
+            const compacted = compactedMessageIds(current);
             const usedIds = new Set(current.messages.filter((message) => !compacted.has(message.id)).flatMap((message) => message.attachments ?? []));
             const next = await downscaleImageOverrides(current.attachments.filter((attachment) => usedIds.has(attachment.id)), imageOverrides);
             imageOverrides = next.overrides;
@@ -1424,12 +1669,14 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
           resources: current.resources,
           mcpConnections: state.mcpConnections,
           signal: controller.signal,
-          executeLocalTool: (name, args) => executeBrowserTool(current, name, args),
+          executeLocalTool: (name, args, toolCall) => executeBrowserTool(current, name, args, toolCall),
           storeResource(value, additions) {
             const resource = createContextResource(value, additions);
             const hasImages = resource.sectionMeta.some((section) => section.images.length);
-            if (!state.workspace.integrations.localTools.context
-                || (!hasImages && (!featureEnabled("compaction") || String(value).length < 24_000))) return value;
+            const retainForImages = hasImages && state.workspace.integrations.localTools.images;
+            const retainForContext = state.workspace.integrations.localTools.context
+              && (hasImages || (featureEnabled("compaction") && String(value).length >= 24_000));
+            if (!retainForImages && !retainForContext) return value;
             current.resources.push(resource);
             toolMeta.resourceId = resource.id;
             return value;
@@ -1530,9 +1777,9 @@ async function continueMessage(id) {
   if (!featureEnabled("streamRecovery")) return;
   const current = session();
   if (state.requests.has(current.id)) return;
-  const target = current.messages.find((item) => item.id === id && item.role === "assistant" && item.state === "interrupted");
+  const target = current.messages.find((item) => item.id === id && item.role === "assistant" && item.state !== "streaming");
   if (!target) return;
-  if (current.messages.at(-1)?.id !== target.id) { toast("Continue is available only for the latest interrupted turn.", 4_000); return; }
+  if (latestContinuableAssistant(current)?.id !== target.id) { toast("Continue is available only for the latest assistant turn without a newer user turn.", 4_000); return; }
   let endpoint;
   try { endpoint = normalizeLocalEndpoint(current.endpoint); }
   catch (error) { toast(await connectionMessage(error), 5_000); return; }
@@ -1540,19 +1787,50 @@ async function continueMessage(id) {
   await launchGeneration(current, endpoint, current.model.trim(), { continuationTarget: target });
 }
 
-function openEdit(messageIdValue) {
+function openEdit(messageIdValue, field = "content", callIndex = -1) {
   const message = session().messages.find((item) => item.id === messageIdValue);
   if (!message) return;
-  state.editMessageId = messageIdValue;
-  elements.editContent.value = message.content;
+  state.editTarget = { messageId: messageIdValue, field, callIndex };
+  if (field === "reasoning") {
+    elements.editDialogTitle.textContent = "Edit reasoning block";
+    elements.editDialogHint.textContent = "The edited reasoning is retained locally and used only by the same opt-in recovery/tool-continuity paths as the original.";
+    elements.editContent.value = message.reasoning;
+  } else if (field === "tool") {
+    const call = message.toolCalls?.[callIndex];
+    if (!call) return;
+    elements.editDialogTitle.textContent = "Edit tool request";
+    elements.editDialogHint.textContent = "Edit the tool name or arguments object. The call id and matching result relationship remain unchanged.";
+    elements.editContent.value = toolCallText(call);
+  } else {
+    elements.editDialogTitle.textContent = message.role === "tool" ? "Edit tool result" : "Edit transcript message";
+    elements.editDialogHint.textContent = "The edited text becomes the exact context sent on future turns.";
+    elements.editContent.value = message.content;
+  }
   elements.editDialog.showModal();
   elements.editContent.focus();
 }
 
 function saveEdit() {
-  const message = session().messages.find((item) => item.id === state.editMessageId);
+  const target = state.editTarget;
+  const message = session().messages.find((item) => item.id === target?.messageId);
   if (!message) return;
-  message.content = elements.editContent.value;
+  if (target.field === "reasoning") message.reasoning = elements.editContent.value;
+  else if (target.field === "tool") {
+    let parsed;
+    try { parsed = JSON.parse(elements.editContent.value); }
+    catch (error) { toast(`Tool request must be valid JSON: ${error.message}`, 5_000); return; }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !String(parsed.name || "").trim()) {
+      toast("Tool request JSON requires a non-empty name and an arguments object or string.", 5_000);
+      return;
+    }
+    const call = message.toolCalls?.[target.callIndex];
+    if (!call) return;
+    const argumentValue = typeof parsed.arguments === "string" ? parsed.arguments : JSON.stringify(parsed.arguments ?? {});
+    call.function = { name: String(parsed.name).trim(), arguments: argumentValue };
+    for (const result of session().messages) {
+      if (result.role === "tool" && result.toolCallId === call.id) result.name = call.function.name;
+    }
+  } else message.content = elements.editContent.value;
   message.updatedAt = new Date().toISOString();
   message.meta = { ...message.meta, edited: true };
   message.error = "";
@@ -1616,6 +1894,22 @@ function deleteMessage(id) {
   queueSave();
 }
 
+function deleteToolCall(messageIdValue, callIndex) {
+  const current = session();
+  const message = current.messages.find((item) => item.id === messageIdValue && item.role === "assistant");
+  const call = message?.toolCalls?.[callIndex];
+  if (!call || !window.confirm(`Delete only the ${call.function.name || "tool"} request and its matching result?`)) return;
+  message.toolCalls.splice(callIndex, 1);
+  current.messages = current.messages.filter((item) => item.toolCallId !== call.id);
+  message.updatedAt = new Date().toISOString();
+  message.meta = { ...message.meta, edited: true };
+  repairToolHistory(current);
+  touchSession(current);
+  renderAll();
+  queueSave();
+  toast("Tool request and matching result removed; assistant text was kept");
+}
+
 function undoDelete() {
   if (!featureEnabled("undoDelete")) return;
   const current = session();
@@ -1656,7 +1950,7 @@ function exportState() {
 function exportActiveMarkdown() {
   syncSessionFromForm();
   const title = session().title.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "chat";
-  download(`${title}.md`, conversationMarkdown(session()), "text/markdown;charset=utf-8");
+  download(`${title}.md`, conversationMarkdown(session(), { complete: featureEnabled("markdownActions") }), "text/markdown;charset=utf-8");
   toast("Conversation Markdown exported");
 }
 
@@ -1664,7 +1958,7 @@ async function copyActiveMarkdown() {
   if (!featureEnabled("markdownActions")) return;
   syncSessionFromForm();
   try {
-    await copyText(conversationMarkdown(session()));
+    await copyText(conversationMarkdown(session(), { complete: true }));
     toast("Conversation Markdown copied");
   } catch (error) {
     toast(error instanceof Error ? error.message : "Copy failed", 5_000);
@@ -1678,7 +1972,7 @@ async function shareActiveMarkdown() {
   if (popup) popup.opener = null;
   elements.shareMarkdown.disabled = true;
   try {
-    const url = await markdownShareUrl(conversationMarkdown(session()));
+    const url = await markdownShareUrl(conversationMarkdown(session(), { complete: true }));
     if (popup) popup.location.replace(url);
     else {
       await copyText(url);
@@ -1697,7 +1991,7 @@ Preserve decisions, constraints, exact identifiers, unresolved work, tool findin
 Do not invent facts. Do not summarize unselected context. Return clean Markdown with no preamble.`;
 
 function compactionSelection(current) {
-  return new Set([...elements.compactionMessages.querySelectorAll("input[type='checkbox']:checked")].map((input) => input.value));
+  return new Set([...elements.compactionMessages.querySelectorAll("input[type='checkbox']:checked:not(:disabled)")].map((input) => input.value));
 }
 
 function expandToolSelection(current, selection) {
@@ -1720,31 +2014,156 @@ function expandToolSelection(current, selection) {
   return result;
 }
 
+function messageSearchText(message) {
+  return [
+    message.role,
+    message.name,
+    message.content,
+    message.reasoning,
+    ...(message.toolCalls ?? []).map(toolCallText),
+  ].filter(Boolean).join("\n");
+}
+
+function fuzzySubsequence(needle, value) {
+  let cursor = 0;
+  for (const character of value) if (character === needle[cursor]) cursor += 1;
+  return cursor === needle.length;
+}
+
+function transcriptSearchMatches(current, query) {
+  const trimmed = String(query || "").trim();
+  if (!trimmed) return [];
+  const quoted = trimmed.match(/^(["'])([\s\S]+)\1$/);
+  const exact = quoted?.[2].toLocaleLowerCase() ?? "";
+  const terms = exact ? [] : (trimmed.toLocaleLowerCase().match(/[\p{L}\p{N}_./:@#-]+/gu) ?? []);
+  const matches = [];
+  current.messages.forEach((message, index) => {
+    const source = messageSearchText(message);
+    const lowered = source.toLocaleLowerCase();
+    let score = 0;
+    if (exact) {
+      const location = lowered.indexOf(exact);
+      if (location < 0) return;
+      score = 10_000 - Math.min(location, 9_000);
+    } else {
+      const words = lowered.match(/[\p{L}\p{N}_./:@#-]+/gu) ?? [];
+      for (const term of terms) {
+        if (lowered.includes(term)) score += lowered.startsWith(term) ? 120 : 90;
+        else if (words.some((word) => word.startsWith(term))) score += 55;
+        else if (term.length >= 3 && words.some((word) => fuzzySubsequence(term, word))) score += 20;
+        else return;
+      }
+    }
+    const anchor = exact || terms[0] || "";
+    const location = lowered.indexOf(anchor);
+    const start = Math.max(0, location < 0 ? 0 : location - 75);
+    const snippet = source.slice(start, start + 230).replace(/\s+/g, " ").trim();
+    matches.push({ message, index, score, snippet });
+  });
+  return matches.sort((left, right) => right.score - left.score || left.index - right.index).slice(0, 60);
+}
+
+function jumpToMessage(messageIdValue) {
+  elements.contextDialog.close();
+  window.requestAnimationFrame(() => {
+    const article = elements.messages.querySelector(`article[data-message-id="${CSS.escape(messageIdValue)}"]`);
+    if (!article) return;
+    article.scrollIntoView({ block: "center" });
+    article.classList.add("message-jump-hit");
+    window.setTimeout(() => article.classList.remove("message-jump-hit"), 1_400);
+  });
+}
+
+function renderTranscriptSearch() {
+  const matches = transcriptSearchMatches(session(), elements.transcriptSearch.value);
+  const fragment = document.createDocumentFragment();
+  for (const match of matches) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "transcript-search-result";
+    const label = document.createElement("strong");
+    label.textContent = `#${match.index + 1} · ${match.message.role}${match.message.name ? `:${match.message.name}` : ""}`;
+    const snippet = document.createElement("span");
+    snippet.textContent = match.snippet || "(empty turn)";
+    button.append(label, snippet);
+    button.addEventListener("click", () => jumpToMessage(match.message.id));
+    fragment.append(button);
+  }
+  if (elements.transcriptSearch.value.trim() && !matches.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "No transcript entries matched.";
+    fragment.append(empty);
+  }
+  elements.transcriptSearchResults.replaceChildren(fragment);
+}
+
+function contextCompactionCard(compaction) {
+  const details = document.createElement("details");
+  details.className = "active-compaction-card";
+  details.style.setProperty("--compaction-color", compactionColor(compaction));
+  const summary = document.createElement("summary");
+  summary.textContent = `${compaction.mode === "soft" ? "Soft" : "Normal"} · ${compaction.messageIds.length} entries · ${compaction.id}`;
+  const body = document.createElement("div");
+  body.className = "message-body";
+  body.append(renderMarkdown(compaction.summary, { rich: featureEnabled("richMarkdown"), diagrams: false }));
+  if (compaction.searchTerms?.length) {
+    const values = document.createElement("p");
+    values.className = "compaction-values";
+    values.textContent = `Searchable: ${compaction.searchTerms.join(", ")}`;
+    body.append(values);
+  }
+  const restore = disclosureButton("Restore this group", () => restoreCompaction(compaction.id));
+  body.append(restore);
+  details.append(summary, body);
+  return details;
+}
+
 function renderContextDialog() {
   const current = session();
   const stats = sessionContextStats(current, projectedMessages(current));
   elements.contextDetail.textContent = `${stats.tokens.toLocaleString()} estimated tokens · ${stats.percent.toFixed(1)}% of ${stats.contextWindow.toLocaleString()}. Originals remain in browser state regardless of projection.`;
-  const active = activeCompactionFor(current);
-  const compacted = new Set(active?.messageIds ?? []);
+  const active = activeCompactionsFor(current);
+  const compacted = compactedMessageIds(current);
+  elements.compactContextReads.disabled = !current.messages.some((message) => (
+    message.role === "tool"
+    && message.name === CONTEXT_TOOL_NAME
+    && message.state !== "streaming"
+    && message.content.trim()
+    && !compacted.has(message.id)
+  ));
   const timeline = document.createDocumentFragment();
   current.messages.forEach((message, index) => {
-    const node = document.createElement("span");
+    const node = document.createElement("button");
+    node.type = "button";
     node.className = "timeline-node";
     node.dataset.role = message.role;
     node.dataset.state = message.state;
     node.dataset.compacted = String(compacted.has(message.id));
-    node.title = `#${index + 1} · ${message.role}${message.name ? `:${message.name}` : ""} · ${message.state}`;
+    const group = active.find((item) => item.messageIds.includes(message.id));
+    if (group) {
+      node.dataset.compactionId = group.id;
+      node.style.setProperty("--compaction-color", compactionColor(group));
+    }
+    node.title = `Jump to #${index + 1} · ${message.role}${message.name ? `:${message.name}` : ""} · ${message.state}`;
+    node.setAttribute("aria-label", node.title);
+    node.addEventListener("click", () => jumpToMessage(message.id));
     timeline.append(node);
   });
   elements.contextTimeline.replaceChildren(timeline);
+  if (featureEnabled("transcriptNavigator")) renderTranscriptSearch();
   if (!current.compactionPrompt) current.compactionPrompt = DEFAULT_COMPACTION_PROMPT;
   if (document.activeElement !== elements.compactionPrompt) elements.compactionPrompt.value = current.compactionPrompt;
   const latest = current.compactions.at(-1) ?? null;
-  elements.restoreContext.disabled = !active && !latest;
-  elements.restoreContext.textContent = active ? "Restore originals" : "Reapply latest";
-  elements.activeCompaction.textContent = active
-    ? `${active.mode === "soft" ? "Soft" : "Normal"} compaction active · ${active.messageIds.length} original entries collapsed · ${active.id}\n${active.summary}`
-    : "No active compaction. The endpoint receives the native transcript.";
+  elements.restoreContext.disabled = !active.length && !latest;
+  elements.restoreContext.textContent = active.length ? "Restore all originals" : "Reapply all compactions";
+  if (active.length) elements.activeCompaction.replaceChildren(...active.map(contextCompactionCard));
+  else {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "No active compaction. The endpoint receives the native transcript.";
+    elements.activeCompaction.replaceChildren(empty);
+  }
   const fragment = document.createDocumentFragment();
   for (const [index, message] of current.messages.entries()) {
     const row = document.createElement("label");
@@ -1752,8 +2171,10 @@ function renderContextDialog() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.value = message.id;
-    checkbox.disabled = message.state === "streaming";
-    checkbox.checked = active?.messageIds.includes(message.id) ?? false;
+    const group = active.find((item) => item.messageIds.includes(message.id));
+    checkbox.disabled = message.state === "streaming" || Boolean(group);
+    checkbox.checked = Boolean(group);
+    checkbox.dataset.selectionKind = message.role === "tool" ? `tool:${message.name || "result"}` : message.role;
     const role = document.createElement("strong");
     role.textContent = message.role === "tool" ? `tool:${message.name || "result"}` : message.role;
     const preview = document.createElement("code");
@@ -1762,19 +2183,23 @@ function renderContextDialog() {
     count.className = "hint";
     count.textContent = `#${index + 1}`;
     row.append(checkbox, role, preview, count);
+    if (group) {
+      row.dataset.compactionId = group.id;
+      row.style.setProperty("--compaction-color", compactionColor(group));
+    }
     fragment.append(row);
   }
   elements.compactionMessages.replaceChildren(fragment);
 }
 
 function openContextDialog() {
-  if (!featureEnabled("contextMeter") && !featureEnabled("compaction")) return;
+  if (!featureEnabled("contextMeter") && !featureEnabled("compaction") && !featureEnabled("transcriptNavigator")) return;
   renderContextDialog();
   elements.contextDialog.showModal();
+  if (featureEnabled("transcriptNavigator")) elements.transcriptSearch.focus();
 }
 
 function activateCompaction(current, value) {
-  for (const item of current.compactions) item.active = false;
   current.compactions.push(value);
   current.activeCompactionId = value.id;
   touchSession(current);
@@ -1788,8 +2213,10 @@ function compactSoft() {
   const current = session();
   const selected = new Set();
   const resources = [];
+  const alreadyCompacted = compactedMessageIds(current);
   for (const message of current.messages) {
     if (message.role !== "tool" || !["web_search", "web_scrape"].includes(message.name)) continue;
+    if (alreadyCompacted.has(message.id)) continue;
     let resource = message.meta?.resourceId ? current.resources.find((item) => item.id === message.meta.resourceId) : null;
     if (!resource) {
       resource = createContextResource(message.content, {
@@ -1804,7 +2231,7 @@ function compactSoft() {
     resources.push(resource);
   }
   if (!selected.size) { toast("No Firecrawl search or scrape results are present in this chat."); return; }
-  const expanded = expandToolSelection(current, selected);
+  const expanded = new Set([...expandToolSelection(current, selected)].filter((id) => !alreadyCompacted.has(id)));
   const summary = [
     "Firecrawl results were losslessly indexed as clean Markdown. Original messages remain stored.",
     ...resources.map((resource) => `- \`${resource.id}\` · ${resource.name} · ${resource.sections.length} ordered section${resource.sections.length === 1 ? "" : "s"}`),
@@ -1812,9 +2239,41 @@ function compactSoft() {
   ].join("\n");
   activateCompaction(current, {
     id: messageId("compact"), mode: "soft", messageIds: [...expanded], summary,
+    searchTerms: compactionSearchTerms(current.messages, expanded),
     prompt: "", active: true, createdAt: new Date().toISOString(),
   });
   toast(`Indexed ${resources.length} Firecrawl result${resources.length === 1 ? "" : "s"}`);
+}
+
+function compactContextReads() {
+  if (!featureEnabled("compaction")) return;
+  const current = session();
+  const reads = current.messages.filter((message) => (
+    message.role === "tool"
+    && message.name === CONTEXT_TOOL_NAME
+    && message.state !== "streaming"
+    && message.content.trim()
+  ));
+  const alreadyCompacted = compactedMessageIds(current);
+  const freshReads = reads.filter((message) => !alreadyCompacted.has(message.id));
+  if (!freshReads.length) { toast("No new context-read results are present in this chat."); return; }
+  const selected = new Set([...expandToolSelection(current, new Set(freshReads.map((message) => message.id)))]
+    .filter((id) => !alreadyCompacted.has(id)));
+  const readIndex = freshReads.map((message) => {
+    const preview = message.content.replace(/\s+/g, " ").trim().slice(0, 120);
+    return `- \`${message.id}\` · ${message.content.length.toLocaleString()} characters${preview ? ` · ${preview}` : ""}`;
+  });
+  const summary = [
+    "Context-read results were losslessly collapsed. Exact tool messages remain stored.",
+    ...readIndex,
+    "Use context_read kind=message with a listed id to reopen one exact result.",
+  ].join("\n");
+  activateCompaction(current, {
+    id: messageId("compact"), mode: "soft", messageIds: [...selected], summary,
+    searchTerms: compactionSearchTerms(current.messages, selected),
+    prompt: "", active: true, createdAt: new Date().toISOString(),
+  });
+  toast(`Collapsed ${freshReads.length} context-read result${freshReads.length === 1 ? "" : "s"}`);
 }
 
 function compactionSource(current, ids) {
@@ -1832,7 +2291,9 @@ async function compactNormal() {
   if (!featureEnabled("compaction")) return;
   const current = session();
   if (elements.compactNormal.disabled) return;
-  const selected = expandToolSelection(current, compactionSelection(current));
+  const alreadyCompacted = compactedMessageIds(current);
+  const selected = new Set([...expandToolSelection(current, compactionSelection(current))]
+    .filter((id) => !alreadyCompacted.has(id)));
   if (!selected.size) { toast("Select one or more completed entries to summarize."); return; }
   if (!current.model.trim()) { toast("Enter a model id first."); return; }
   current.compactionPrompt = elements.compactionPrompt.value.trim() || DEFAULT_COMPACTION_PROMPT;
@@ -1847,6 +2308,7 @@ async function compactNormal() {
     if (!result.content.trim()) throw new Error("The stateless summarizer returned no summary.");
     activateCompaction(current, {
       id: messageId("compact"), mode: "normal", messageIds: [...selected], summary: result.content.trim(),
+      searchTerms: compactionSearchTerms(current.messages, selected),
       prompt: current.compactionPrompt, active: true, createdAt: new Date().toISOString(),
     });
     toast(`${selected.size} entries compacted; originals remain available`);
@@ -1862,22 +2324,34 @@ async function compactNormal() {
 function restoreContext() {
   if (!featureEnabled("compaction")) return;
   const current = session();
-  const active = activeCompactionFor(current);
-  if (active) {
-    active.active = false;
+  const active = activeCompactionsFor(current);
+  if (active.length) {
+    for (const item of active) item.active = false;
     current.activeCompactionId = "";
   } else {
-    const latest = current.compactions.at(-1);
-    if (!latest) return;
-    for (const item of current.compactions) item.active = false;
-    latest.active = true;
-    current.activeCompactionId = latest.id;
+    if (!current.compactions.length) return;
+    for (const item of current.compactions) item.active = true;
+    current.activeCompactionId = current.compactions.at(-1).id;
   }
   touchSession(current);
   renderAll();
   renderContextDialog();
   queueSave();
-  toast(active ? "Native original context restored" : "Latest compaction reapplied");
+  toast(active.length ? "All native original context restored" : "All compaction groups reapplied");
+}
+
+function restoreCompaction(id) {
+  if (!featureEnabled("compaction")) return;
+  const current = session();
+  const target = current.compactions.find((item) => item.id === id && item.active);
+  if (!target) return;
+  target.active = false;
+  current.activeCompactionId = activeCompactionsFor(current).at(-1)?.id ?? "";
+  touchSession(current);
+  renderAll();
+  if (elements.contextDialog.open) renderContextDialog();
+  queueSave();
+  toast(`${target.mode === "soft" ? "Soft" : "Normal"} group restored to native context`);
 }
 
 function selectOlderContext() {
@@ -1885,6 +2359,10 @@ function selectOlderContext() {
   const rows = [...elements.compactionMessages.querySelectorAll("input[type='checkbox']")].filter((input) => !input.disabled);
   const cutoff = Math.max(0, rows.length - 4);
   rows.forEach((input, index) => { input.checked = index < cutoff; });
+}
+
+function clearContextSelection() {
+  for (const input of elements.compactionMessages.querySelectorAll("input[type='checkbox']:not(:disabled)")) input.checked = false;
 }
 
 function renderTodos(current) {
@@ -1918,6 +2396,22 @@ function renderTodos(current) {
     const empty = document.createElement("p"); empty.className = "hint"; empty.textContent = "No TODOs yet."; fragment.append(empty);
   }
   elements.todoList.replaceChildren(fragment);
+  elements.clearTodosExceptRecent.disabled = current.todos.length <= 1;
+}
+
+function clearTodosExceptRecent() {
+  if (!featureEnabled("todoTool")) return;
+  const current = session();
+  if (current.todos.length <= 1) return;
+  const recent = current.todos.reduce((latest, item) => (
+    Date.parse(item.updatedAt) >= Date.parse(latest.updatedAt) ? item : latest
+  ));
+  if (!window.confirm(`Clear ${current.todos.length - 1} TODOs and keep only the most recently updated item?`)) return;
+  current.todos = [recent];
+  touchSession(current);
+  renderWorkspaceDialog();
+  queueSave();
+  toast("Older TODOs cleared");
 }
 
 function selectedDocument(current) {
@@ -2189,6 +2683,7 @@ function setFeatureMatrix(enabled) {
   }
   for (const control of Object.values(featureControls)) control.checked = enabled;
   syncIntegrationsFromForm();
+  if (enabled) for (const item of state.workspace.sessions) hydrateScrapedImageResources(item);
   const current = session();
   for (const item of state.workspace.sessions) item.parameters.maxTokens = enabled ? null : 8192;
   writeParameters(current.parameters);
@@ -2198,18 +2693,20 @@ function setFeatureMatrix(enabled) {
 }
 
 function handleFeatureInput(event) {
-  if (event?.target === elements.featureParallelSessions
-      && !elements.featureParallelSessions.checked
+  if (!elements.featureParallelSessions.checked
       && [...state.requests.keys()].some((id) => id !== session().id)) {
     elements.featureParallelSessions.checked = true;
     toast("Stop background chat generations before disabling Parallel chats.", 5_000);
-    return;
   }
   const previousAuto = featureEnabled("autoMaxTokens");
-  if (event?.target === elements.writeToolsEnabled && elements.writeToolsEnabled.checked) {
+  const previousImageReads = featureEnabled("imageReads");
+  if (elements.writeToolsEnabled.checked) {
     elements.readToolsEnabled.checked = true;
   }
   syncIntegrationsFromForm();
+  if (!previousImageReads && featureEnabled("imageReads")) {
+    for (const item of state.workspace.sessions) hydrateScrapedImageResources(item);
+  }
   const current = session();
   if (previousAuto !== featureEnabled("autoMaxTokens")) {
     for (const item of state.workspace.sessions) item.parameters.maxTokens = featureEnabled("autoMaxTokens") ? null : 8192;
@@ -2218,6 +2715,66 @@ function handleFeatureInput(event) {
   applyFeatureVisibility();
   renderAll();
   queueSave();
+}
+
+function installCheckboxPainter(container, rowSelector, groupAttribute, commit) {
+  let gesture = null;
+  let suppressClickUntil = 0;
+
+  const checkboxAt = (node) => {
+    if (!(node instanceof Element)) return null;
+    const row = node.closest(rowSelector);
+    if (!row || !container.contains(row)) return null;
+    return row.querySelector("input[type='checkbox']");
+  };
+  const paint = (checkbox) => {
+    if (!gesture || !checkbox || checkbox.disabled || gesture.visited.has(checkbox)) return;
+    checkbox.checked = gesture.checked;
+    gesture.visited.add(checkbox);
+  };
+  const groupFor = (checkbox) => checkbox?.dataset[groupAttribute]
+    || checkbox?.closest(rowSelector)?.dataset[groupAttribute]
+    || "";
+  const finish = (event) => {
+    if (!gesture || (event?.pointerId != null && event.pointerId !== gesture.pointerId)) return;
+    const completed = gesture;
+    gesture = null;
+    suppressClickUntil = performance.now() + 700;
+    try { container.releasePointerCapture(completed.pointerId); } catch { /* The pointer may already be released. */ }
+    commit(completed.origin);
+  };
+
+  container.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const checkbox = checkboxAt(event.target);
+    if (!checkbox || checkbox.disabled) return;
+    event.preventDefault();
+    checkbox.focus({ preventScroll: true });
+    const checked = !checkbox.checked;
+    if (event.shiftKey) {
+      const group = groupFor(checkbox);
+      for (const candidate of container.querySelectorAll(`${rowSelector} input[type='checkbox']`)) {
+        if (!candidate.disabled && groupFor(candidate) === group) candidate.checked = checked;
+      }
+      suppressClickUntil = performance.now() + 700;
+      commit(checkbox);
+      return;
+    }
+    gesture = { pointerId: event.pointerId, checked, origin: checkbox, visited: new Set() };
+    paint(checkbox);
+    try { container.setPointerCapture(event.pointerId); } catch { /* Pointer capture is optional. */ }
+  });
+  container.addEventListener("pointermove", (event) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    paint(checkboxAt(document.elementFromPoint(event.clientX, event.clientY)));
+  });
+  container.addEventListener("pointerup", finish);
+  container.addEventListener("pointercancel", finish);
+  container.addEventListener("lostpointercapture", finish);
+  container.addEventListener("click", (event) => {
+    if (performance.now() > suppressClickUntil || !checkboxAt(event.target)) return;
+    event.preventDefault();
+  }, true);
 }
 
 elements.connect.addEventListener("click", connect);
@@ -2240,6 +2797,7 @@ elements.undo.addEventListener("click", undoDelete);
 elements.featureEnableAll.addEventListener("click", () => setFeatureMatrix(true));
 elements.featureDisableAll.addEventListener("click", () => setFeatureMatrix(false));
 elements.contextMeter.addEventListener("click", openContextDialog);
+elements.openNavigator.addEventListener("click", openContextDialog);
 elements.openWorkspace.addEventListener("click", openWorkspaceDialog);
 elements.printChat.addEventListener("click", () => window.print());
 elements.importButton.addEventListener("click", () => elements.importFile.click());
@@ -2256,16 +2814,20 @@ elements.mcpList.addEventListener("change", (event) => {
 });
 elements.testFirecrawl.addEventListener("click", verifyFirecrawl);
 elements.compactSoft.addEventListener("click", compactSoft);
+elements.compactContextReads.addEventListener("click", compactContextReads);
 elements.compactNormal.addEventListener("click", compactNormal);
 elements.restoreContext.addEventListener("click", restoreContext);
 elements.selectOlderContext.addEventListener("click", selectOlderContext);
+elements.clearContextSelection.addEventListener("click", clearContextSelection);
 elements.closeContext.addEventListener("click", () => elements.contextDialog.close());
+elements.transcriptSearch.addEventListener("input", renderTranscriptSearch);
 elements.compactionPrompt.addEventListener("input", () => {
   session().compactionPrompt = elements.compactionPrompt.value;
   queueSave();
 });
 elements.closeWorkspace.addEventListener("click", () => elements.workspaceDialog.close());
 elements.addTodo.addEventListener("click", addTodo);
+elements.clearTodosExceptRecent.addEventListener("click", clearTodosExceptRecent);
 elements.todoInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") { event.preventDefault(); addTodo(); }
 });
@@ -2298,6 +2860,13 @@ for (const input of [
   elements.firecrawlUrl, elements.firecrawlLimit,
 ]) input.addEventListener("input", handleIntegrationInput);
 for (const input of Object.values(featureControls)) input.addEventListener("input", handleFeatureInput);
+installCheckboxPainter(
+  document.querySelector("#feature-matrix"),
+  ".feature-row",
+  "featureGroup",
+  (checkbox) => handleFeatureInput({ target: checkbox }),
+);
+installCheckboxPainter(elements.compactionMessages, ".compaction-entry", "selectionKind", () => {});
 
 window.addEventListener("pagehide", () => persist.flush());
 

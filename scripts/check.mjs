@@ -30,9 +30,10 @@ function tagForId(id) {
 for (const id of [
   "feature-stream-recovery", "feature-auto-max-tokens", "feature-rich-markdown", "feature-parallel-sessions",
   "feature-markdown-actions", "feature-vision-retry", "feature-stable-scroll", "feature-context-meter",
-  "feature-compaction", "read-tools-enabled", "write-tools-enabled", "todo-tools-enabled", "feature-undo-delete",
+  "feature-compaction", "feature-image-reads", "read-tools-enabled", "write-tools-enabled", "todo-tools-enabled",
+  "feature-undo-delete", "feature-turn-controls", "feature-transcript-navigator",
 ]) assert.doesNotMatch(tagForId(id), /\bchecked\b/i, `#${id} must default off`);
-for (const id of ["copy-markdown", "share-markdown", "undo", "open-workspace", "context-meter", "context-window"]) {
+for (const id of ["copy-markdown", "share-markdown", "undo", "open-workspace", "open-navigator", "context-meter", "context-window"]) {
   assert.match(tagForId(id), /\bhidden\b/i, `#${id} must remain hidden in the all-disabled baseline`);
 }
 assert.match(tagForId("max-tokens"), /\bvalue="8192"/i, "baseline max_tokens must remain 8192");

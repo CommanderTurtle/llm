@@ -54,7 +54,7 @@ workspace
 
 `src/workspace.js` is the only constructor/normalizer for this shape. It rejects unknown workspace schemas, future versions, empty session lists, and more than 1,000 sessions. Every imported session is reconstructed rather than trusted as a live object. Attachment references that do not resolve inside their session are removed. A `workspace-v1` import migrates to v2 with every new feature disabled.
 
-The persisted feature matrix is wholly opt-in. Its default is thirteen `false` values. Derived local-tool flags are rebuilt from it rather than trusted from imported JSON. Write tools imply read tools because their optimistic-concurrency contract requires a current read receipt.
+The persisted feature matrix is wholly opt-in. Its default is sixteen `false` values. Derived local-tool flags are rebuilt from it rather than trusted from imported JSON. Write tools imply read tools because their optimistic-concurrency contract requires a current read receipt. Feature rows support pointer painting and grouped Shift-click without changing their ordinary keyboard checkbox behavior.
 
 The IndexedDB database `llm-shel-harness`, object store `state`, key `workspace` contains one normalized snapshot. `src/storage.js` serializes debounced writes so an older asynchronous transaction cannot overwrite a later one. The `pagehide` handler flushes the latest queued snapshot. A persisted response with state `streaming` is recovered as `stopped`/`interrupted`.
 
@@ -108,22 +108,22 @@ Tool calls execute serially. This produces deterministic transcript order and av
 
 Feature-gated local tools add no network service. `context_read` exposes a timeline, an exact original message, separately stored reasoning, a compaction record, or one numbered resource section. Long Firecrawl output is normalized once, preserved exactly after that normalization, and divided at readable boundaries; concatenating its sections reproduces the stored resource byte-for-byte. Derived section metadata contains at most two `code`, `table`, or `html_gibberish` tags and source-bound image URLs. Reading one section records a capability receipt that exposes `resource_search` only for that resource; the in-memory inverted word index returns section anchors and excerpts without rewriting the stored content.
 
-`view_image` accepts only an exact URL already indexed inside the specified resource section. The approval dialog resolves that tuple before showing its source page, subsection metadata, and excerpt. An accepted result gets an ephemeral load receipt so the image appears immediately; persisted history requires a fresh click after reload and therefore does not make an unsolicited image request.
+`view_image` is independently feature-gated and appears only after a stored Firecrawl resource exposes at least one exact image URL. Enabling the feature also hydrates image-bearing resources from existing Firecrawl result turns that predate the checkbox. The section may be supplied or resolved from that URL. The approval dialog validates the tuple before showing its source page, subsection metadata, and excerpt. An accepted result gets an ephemeral load receipt so the image appears immediately; persisted history requires a fresh click after reload and therefore does not make an unsolicited image request.
 
-`read_document` and `instructions_read` return revision metadata, stable FNV-derived line hashes, and diagnostics. A successful read records an in-memory receipt for that session and revision. `put_document` and `instructions_put` reject writes to an existing document without that receipt, reject stale expected revisions, and reject ambiguous or overlapping hash ranges. Every accepted change appends an immutable content snapshot. The UI can compare adjacent revisions as context, removed, and added lines.
+`read_document` and `instructions_read` return revision metadata, stable FNV-derived line hashes, and diagnostics. A successful read records an in-memory receipt for that session and revision. For a full replacement, `put_document` and `instructions_put` can consume the same assistant turn's ordinary text before a required standalone final `DONE` line via `from_response=true`; the large document is not duplicated inside JSON tool arguments. Existing documents still require their current read receipt. Small edits retain stable hashline ranges. Stale revisions and ambiguous or overlapping ranges fail, and every accepted change appends an immutable content snapshot. The UI can compare adjacent revisions as context, removed, and added lines.
 
 The lightweight browser linter validates JSON, balances common code delimiters while respecting strings/comments, and checks Markdown fences plus supported fenced languages. It is deliberately a local diagnostic layer, not a replacement for a language compiler or LSP.
 
 TODO entries are session-local structured records with stable ids, checked state, and timestamps. The visible checklist and model tool operate on the same records.
 
-### Lossless context controls
+### Composable context controls
 
 Compaction changes only API projection:
 
-- **Soft** identifies Firecrawl search/scrape turns, stores clean output as ordered browser resources, and projects an index with exact ids.
+- **Soft** identifies fresh Firecrawl search/scrape turns or completed context-read request/result pairs, then projects a lossless index with exact ids.
 - **Normal** lets the user select completed entries, expands tool-call/result groups, and runs a separate stateless model call with an editable summarizer prompt.
 
-The resulting envelope includes the summary plus the ids/order of every collapsed original. Originals, reasoning, attachments, and resources remain in the session. Restore removes the envelope from projection immediately; Reapply selects the latest saved compaction. The context meter uses projected estimates while compaction is active rather than an old server usage count.
+Each new group excludes already compacted entries and composes with every earlier active group. Their envelopes are concatenated into one projected system turn and include the summary, deterministic searchable values, and ids/order of every collapsed original. Originals, reasoning, attachments, and resources remain in the session. UI originals and their synthetic summary share a stable color; one group or all groups can be restored, then reapplied together. The context meter uses projected estimates while any compaction is active rather than an old server usage count.
 
 ## OCR
 
@@ -168,13 +168,13 @@ The baseline path in `src/markdown.js` creates DOM nodes directly and assigns mo
 
 Rich Markdown is a separate opt-in path. Highlight.js, Mermaid, and Temml are vendored and imported lazily. Highlight and math output is generated by those local renderers; Mermaid diagrams are produced in an isolated render host after a message stops streaming. Task lists and diagnostics remain ordinary DOM. Disabling Rich Markdown returns immediately to the baseline parser.
 
-The whole-chat share action lazily imports the vendored ln.kr/ha.nr codec. Small Markdown uses its V1 text encoder and larger Markdown uses its deflate-backed V4 encoder, then opens the canonical `https://a.shel.sh/#m:` URL. No remote compression request is made.
+The whole-chat download, copy, and share paths derive from the same complete Markdown projection. It always includes every native turn even when API context is compacted, plus reasoning/tool disclosures, compaction records, and exact attachment links/content. Share lazily imports the vendored ln.kr/ha.nr codec: small Markdown uses its V1 text encoder and larger Markdown uses its deflate-backed V4 encoder, then opens the canonical `https://a.shel.sh/#m:` URL. No remote compression request is made.
 
-Streaming output coalesces browser paints and replaces only the active assistant article, rather than reconstructing every visible turn per token. Expensive rich highlighting waits until the message is terminal, and context-meter recalculation is bounded to twice per second during a stream. Stable streaming scroll snapshots the outer chat position, open disclosure state, and inner reasoning/code scroll positions before that replacement. It follows output only while the reader is near the bottom. With the box clear, the original forced-follow behavior remains.
+Streaming output coalesces browser paints and mutates only stable content/reasoning/tool nodes inside the active assistant article rather than reconstructing the card, transcript, or session list per token. Expensive rich highlighting waits until the message is terminal, and context-meter recalculation is bounded to twice per second during a stream. Stable streaming scroll retains the reasoning disclosure and its independent scroll position in place, and follows output only while the reader is near the bottom. With the box clear, the original forced-follow behavior remains.
 
 Vision resize recovery catches only recognizable image-dimension `ValueError`s before substantive output exists. All referenced image projections are proportionally reduced by exactly 128 pixels on the longest side using canvas, then the same request is retried. Each retry derives from the previous projection. Stored attachment bytes and exports are never modified.
 
-User messages are rendered as pre-wrapped text. Tool outputs and assistant messages use the same Markdown renderer. Reasoning and tool payloads live in native `<details>` elements.
+User messages are rendered as pre-wrapped text. Tool outputs and assistant messages use the same Markdown renderer. Reasoning and tool payloads live in native `<details>` elements. Advanced turn controls edit reasoning independently and edit or remove one tool request with its matching result without deleting the assistant text. Timeline + search presents role/state/compaction-colored jump nodes and uses fuzzy token matching unless the entire query is quoted for an exact phrase.
 
 ## Static-host constraints
 

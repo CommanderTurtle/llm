@@ -32,25 +32,28 @@ Refresh resumes the last workspace. It does not reconnect to a model, Firecrawl,
 
 ## Opt-in feature matrix
 
-Every enhancement below starts disabled and is saved in browser state. **Disable all** restores the request and interaction contract of the last baseline release: the 8192-token output allowance, one foreground generation, the original Markdown renderer and scrolling, the original deletion behavior, and only the previously enabled OCR/Firecrawl/MCP tools. Nothing silently enables a dependent tool; the sole dependency is that write tools also enable their required read tools.
+Every enhancement below starts disabled and is saved in browser state. **Clear all** restores the request and interaction contract of the last baseline release: the 8192-token output allowance, one foreground generation, the original Markdown renderer and scrolling, the original deletion behavior, and only the previously enabled OCR/Firecrawl/MCP tools. Nothing silently enables a dependent tool; the sole dependency is that write tools also enable their required read tools. Drag across feature rows to paint checkboxes, or Shift-click one checkbox to apply that choice to its small functional group.
 
 | Checkbox | Effect |
 | --- | --- |
 | Interrupted-response recovery | Distinguishes a real terminal signal from clean premature EOF, empty output, or `finish_reason: length`; preserves partial output and offers **Continue**. It adds no timeout. |
 | Server-decided output allowance | Omits `max_tokens` so the endpoint chooses its allowance. Turning it off restores 8192. |
 | Rich Markdown | Lazily enables syntax highlighting, Mermaid, Temml math (`$`, `$$`, and math fences), task lists, code copy, and lightweight code diagnostics. |
-| Parallel chats | Lets independent sessions continue generating while the user switches or starts another chat. Each session owns its own request and Stop action; streaming patches only the active assistant card instead of rebuilding the transcript. |
-| Markdown copy + link | Adds whole-chat Copy and a lazy local a.shel.sh Markdown-link action. |
+| Parallel chats | Lets independent sessions continue generating while the user switches or starts another chat. Each session owns its own request and Stop action. Its status marker is static, and streaming mutates only stable text nodes inside the active assistant card—there is no per-token session-list repaint, Markdown pass, or card replacement. |
+| Complete Markdown export | Makes download, Copy, and the lazy local a.shel.sh link use one complete Markdown document: every native turn, reasoning block, tool request/result, attachment reference, and compaction record is retained regardless of API projection. |
 | Vision resize recovery | On an image-dimension `ValueError`, retries the request with browser-only projections reduced by exactly 128 pixels on the longest side until accepted. Stored originals never change. |
-| Stable streaming scroll | Follows output only while near the bottom and preserves reasoning/tool disclosure state and inner scroll positions. |
+| Stable streaming scroll | Follows output only while near the bottom. The growing reasoning node is retained in place, so its disclosure state, selection, and independent scroll position are not destroyed by a new delta. |
 | Context meter | Shows a per-session token estimate against the model-advertised or manually entered context window. |
-| Lossless context controls | Enables Soft Firecrawl indexing and user-selected Normal summarization. Exact originals stay stored and can be restored or reapplied. Indexed sections carry at most two comma-delimited `code`, `table`, or `html_gibberish` tags. |
-| Browser read tools | Lets the model read exact transcript/reasoning entries, resources, instructions, and editor documents. Scraped-image viewing is source-bound, and reading a resource section unlocks indexed search for only that resource. |
-| Hashline write tools | Adds read-before-write, revisioned document and `instructions.md` PUT operations with hashline patches, diffs, and diagnostics. |
-| TODO tool | Adds a visible per-chat checklist that the model and user can update. |
+| Composable context controls | Enables separate Soft actions for Firecrawl indexing and completed context-read collapse, plus user-selected Normal summarization. Each new group composes with earlier active groups instead of reopening them; exact originals stay stored and can be restored independently or together. Indexed sections carry at most two comma-delimited `code`, `table`, or `html_gibberish` tags. |
+| Scraped image reads | Exposes source-bound `view_image` only for image URLs discovered in earlier stored Firecrawl results. The approval view shows the source and subsection. |
+| Browser read tools | Lets the model read exact transcript/reasoning entries, resources, instructions, and editor documents. Reading a resource section unlocks indexed search for only that resource. |
+| Document write tools | Adds read-before-write, revisioned document and `instructions.md` PUT operations. A full document can be written as normal assistant Markdown ending with `DONE` on its own line, then stored with `from_response=true`; small changes retain the precise hashline path. |
+| TODO tool | Adds a visible per-chat checklist that the model and user can update, plus **Clear all but recent**, which keeps the most recently updated item after confirmation. |
 | Undo deleted turns | Keeps the last 20 deleted turn groups in a browser-local undo stack. |
+| Advanced turn controls | Adds reasoning copy/edit and individual tool-request copy/edit/delete without removing the containing assistant turn. |
+| Timeline + search | Adds a color-coded jump timeline and transcript search. Unquoted terms use forgiving fuzzy matching; a whole query in matching quotes is an exact phrase. |
 
-**Enable all** and **Disable all** apply the entire matrix. Parallel chats cannot be disabled while another session is still generating; stop that background request first so its Stop control never becomes unreachable.
+**Enable all** and **Clear all** apply the entire matrix. Parallel chats cannot be disabled while another session is still generating; stop that background request first so its Stop control never becomes unreachable.
 
 ## Attachments
 
@@ -73,9 +76,9 @@ Tools are translated into OpenAI function definitions and exposed only when enab
 
 ### Browser workspace
 
-The opt-in browser workspace stores documents, `instructions.md`, TODOs, revisions, diffs, and lint diagnostics inside the current chat. Existing documents must be read at their current revision before the model may write them. A write can replace the document or target stable per-line hashes; stale, ambiguous, overlapping, or unread edits fail explicitly. Each accepted write creates an immutable browser-local revision that can be compared as red/green lines.
+The opt-in browser workspace stores documents, `instructions.md`, TODOs, revisions, diffs, and lint diagnostics inside the current chat. For a full document, the model writes ordinary Markdown or code in its response, ends with a standalone `DONE`, and calls the applicable PUT with `from_response=true`; the page stores the exact response before that marker, so the content is never duplicated or JSON-escaped inside tool arguments. Existing documents must still be read at their current revision first. Small changes use stable per-line hashes; stale, ambiguous, overlapping, or unread edits fail explicitly. Each accepted write creates an immutable browser-local revision that can be compared as red/green lines.
 
-The context-read tool can reopen the exact content or reasoning of a stored turn. Long Firecrawl results are split losslessly into ordered Markdown sections only when Lossless context controls is enabled; the model initially receives an index plus section one and may open later sections individually. Each section is classified with at most two comma-delimited `code`, `table`, or `html_gibberish` tags. Once `context_read` opens a resource section, `resource_search` becomes available for that resource and uses an in-memory word index to return matching section links and short excerpts.
+The context-read tool can reopen the exact content or reasoning of a stored turn. Completed context-read results render as closed disclosures, and **Soft · collapse context reads** removes their matching request/result pairs only from the outbound projection while retaining their exact message ids for later reads. Long Firecrawl results are split losslessly into ordered Markdown sections only when Composable context controls is enabled; the model initially receives an index plus section one and may open later sections individually. Each section is classified with at most two comma-delimited `code`, `table`, or `html_gibberish` tags. Once `context_read` opens a resource section, `resource_search` becomes available for that resource and uses an in-memory word index to return matching section links and short excerpts.
 
 ### Local OCR
 
@@ -88,7 +91,7 @@ Enable Firecrawl and enter a private URL such as `http://localhost:3002`. The ha
 - `POST /v2/search` for `web_search`, requesting web results and main-content Markdown.
 - `POST /v2/scrape` for `web_scrape`, requesting main-content Markdown for one HTTP(S) URL.
 
-With Browser read tools or Lossless context controls enabled, image URLs actually present in a stored Firecrawl section expose `view_image`. The call is limited to an exact indexed URL; its approval panel shows the page source, section heading/tags, and an excerpt before the browser renders anything. Approved images load in the chat without a referrer. A restored workspace shows a **Load viewed image** button instead of making an unsolicited network request.
+With **Scraped image reads** enabled, image URLs actually present in a stored Firecrawl section expose `view_image` on later model rounds. Enabling it after a scrape also indexes eligible image references from already-stored Firecrawl tool results. The call is limited to an exact indexed URL; its approval panel shows the page source, section heading/tags, and an excerpt before the browser renders anything. Approved images load in the chat without a referrer. A restored workspace shows a **Load viewed image** button instead of making an unsolicited network request.
 
 The **Test** button performs a one-result search. Firecrawl is separate from MCP and from Firebending; no endpoint is inferred from another integration. See the [Firecrawl search API](https://docs.firecrawl.dev/api-reference/endpoint/search) and [scrape API](https://docs.firecrawl.dev/api-reference/endpoint/scrape) for the service contract.
 
@@ -124,7 +127,7 @@ MCP tools can be more privileged than this page. Approval controls whether the h
 - A response interrupted by refresh is recovered as **stopped**, never left permanently **streaming**.
 - Images are sent as base64 data URLs to the configured model endpoint. Converted non-image files are sent as text/Markdown. OCR and conversion stay local unless their resulting text is later included in a model request.
 - No service worker, analytics beacon, cookies, credential store, or remote asset CDN is used.
-- Compaction never deletes or overwrites a turn. Normal compaction adds a stateless model-generated summary projection; Soft compaction indexes Firecrawl output. The native entries, reasoning, resources, and revision history remain in the exported workspace.
+- Compaction never deletes or overwrites a turn. Normal compaction adds a stateless model-generated summary projection; Soft compaction indexes Firecrawl output or collapses completed context-read request/result pairs. Active groups compose, carry deterministic searchable values, and share a color across their originals and summary card. The native entries, reasoning, resources, and revision history remain in the workspace and complete Markdown export.
 - Vision retries alter only the outbound in-memory image projection. The exact attached data URL remains in IndexedDB and state exports.
 - Rich renderer and a.shel.sh compression modules are vendored and loaded only after their feature is used.
 

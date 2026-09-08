@@ -21,6 +21,7 @@
       <button id="share-markdown" class="icon-button" type="button" title="Open conversation Markdown in a.shel.sh" aria-label="Open conversation Markdown in a.shel.sh" hidden>↗</button>
       <button id="undo" class="icon-button" type="button" title="Undo last deleted turn" aria-label="Undo last deleted turn" disabled hidden>↶</button>
       <button id="open-workspace" type="button" hidden>Workspace</button>
+      <button id="open-navigator" type="button" hidden>Timeline</button>
       <button id="context-meter" class="context-meter" type="button" title="View context and compaction" aria-label="View context and compaction" hidden>
         <span id="context-ring" class="context-ring"><span id="context-percent">0%</span></span>
       </button>
@@ -122,25 +123,28 @@
 
         <details id="feature-matrix">
           <summary>Feature matrix</summary>
-          <p class="hint">Every enhancement is opt-in. With all boxes clear, requests and interaction match the last baseline release.</p>
+          <p class="hint">Every enhancement is opt-in. Drag across boxes to paint a choice; Shift-click selects every feature in the same group. With all boxes clear, requests and interaction match the last baseline release.</p>
           <div class="feature-matrix">
-            <label class="feature-row"><input id="feature-stream-recovery" type="checkbox" /><span><strong>Interrupted-response recovery</strong><small>Recognize missing terminal signals or output limits and offer Continue.</small></span></label>
-            <label class="feature-row"><input id="feature-auto-max-tokens" type="checkbox" /><span><strong>Server-decided output allowance</strong><small>Omit <code>max_tokens</code>; disabling restores the 8192 baseline.</small></span></label>
-            <label class="feature-row"><input id="feature-rich-markdown" type="checkbox" /><span><strong>Rich Markdown</strong><small>Syntax highlighting, Mermaid, math, task lists, and inline diagnostics.</small></span></label>
-            <label class="feature-row"><input id="feature-parallel-sessions" type="checkbox" /><span><strong>Parallel chats</strong><small>Switch or create chats while other sessions continue generating.</small></span></label>
-            <label class="feature-row"><input id="feature-markdown-actions" type="checkbox" /><span><strong>Markdown copy + link</strong><small>Show whole-chat copy and a.shel.sh link actions.</small></span></label>
-            <label class="feature-row"><input id="feature-vision-retry" type="checkbox" /><span><strong>Vision resize recovery</strong><small>Retry dimension ValueErrors in-browser, reducing the longest side by 128px each time.</small></span></label>
-            <label class="feature-row"><input id="feature-stable-scroll" type="checkbox" /><span><strong>Stable streaming scroll</strong><small>Follow only near the bottom and preserve open reasoning plus nested scroll positions.</small></span></label>
-            <label class="feature-row"><input id="feature-context-meter" type="checkbox" /><span><strong>Context meter</strong><small>Show per-chat token estimates and the circular context gauge.</small></span></label>
-            <label class="feature-row"><input id="feature-compaction" type="checkbox" /><span><strong>Lossless context controls</strong><small>Soft Firecrawl indexing and selected Normal summaries with restorable originals.</small></span></label>
-            <label class="feature-row"><input id="read-tools-enabled" type="checkbox" /><span><strong>Browser read tools</strong><small>Let the model reopen exact context, reasoning, instructions, and documents.</small></span></label>
-            <label class="feature-row"><input id="write-tools-enabled" type="checkbox" /><span><strong>Hashline write tools</strong><small>Revisioned document and instructions PUT after a required current read.</small></span></label>
-            <label class="feature-row"><input id="todo-tools-enabled" type="checkbox" /><span><strong>TODO tool</strong><small>Expose the visible, per-chat checklist to the model and user.</small></span></label>
-            <label class="feature-row"><input id="feature-undo-delete" type="checkbox" /><span><strong>Undo deleted turns</strong><small>Keep a short browser-local undo stack for transcript deletions.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-stream-recovery" type="checkbox" /><span><strong>Interrupted-response recovery</strong><small>Recognize missing terminal signals or output limits and offer Continue on the latest assistant turn.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-auto-max-tokens" type="checkbox" /><span><strong>Server-decided output allowance</strong><small>Omit <code>max_tokens</code>; disabling restores the 8192 baseline.</small></span></label>
+            <label class="feature-row" data-feature-group="presentation"><input id="feature-rich-markdown" type="checkbox" /><span><strong>Rich Markdown</strong><small>Syntax highlighting, Mermaid, math, task lists, and inline diagnostics.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-parallel-sessions" type="checkbox" /><span><strong>Parallel chats</strong><small>Switch or create chats while other sessions continue generating, with no per-token session-list repaint.</small></span></label>
+            <label class="feature-row" data-feature-group="presentation"><input id="feature-markdown-actions" type="checkbox" /><span><strong>Complete Markdown export</strong><small>Copy, download, or open a rich transcript containing every original turn, reasoning block, tool call, and compaction record.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-vision-retry" type="checkbox" /><span><strong>Vision resize recovery</strong><small>Retry dimension ValueErrors in-browser, reducing the longest side by 128px each time.</small></span></label>
+            <label class="feature-row" data-feature-group="reliability"><input id="feature-stable-scroll" type="checkbox" /><span><strong>Stable streaming scroll</strong><small>Follow only near the bottom; preserve the reasoning node, disclosure, and nested scroll position.</small></span></label>
+            <label class="feature-row" data-feature-group="context"><input id="feature-context-meter" type="checkbox" /><span><strong>Context meter</strong><small>Show per-chat token estimates and the circular context gauge.</small></span></label>
+            <label class="feature-row" data-feature-group="context"><input id="feature-compaction" type="checkbox" /><span><strong>Composable context controls</strong><small>Stack lossless Soft collapses and selected Normal summaries without reopening earlier groups.</small></span></label>
+            <label class="feature-row" data-feature-group="tools"><input id="feature-image-reads" type="checkbox" /><span><strong>Scraped image reads</strong><small>Expose source-bound <code>view_image</code> for images discovered in earlier Firecrawl results.</small></span></label>
+            <label class="feature-row" data-feature-group="tools"><input id="read-tools-enabled" type="checkbox" /><span><strong>Browser read tools</strong><small>Let the model reopen exact context, reasoning, instructions, and documents.</small></span></label>
+            <label class="feature-row" data-feature-group="tools"><input id="write-tools-enabled" type="checkbox" /><span><strong>Document write tools</strong><small>Store a formal response ending in DONE directly, or make precise hashline edits after reading.</small></span></label>
+            <label class="feature-row" data-feature-group="tools"><input id="todo-tools-enabled" type="checkbox" /><span><strong>TODO tool</strong><small>Expose the per-chat checklist, including one-click cleanup that keeps the latest item.</small></span></label>
+            <label class="feature-row" data-feature-group="editing"><input id="feature-undo-delete" type="checkbox" /><span><strong>Undo deleted turns</strong><small>Keep a short browser-local undo stack for transcript deletions.</small></span></label>
+            <label class="feature-row" data-feature-group="editing"><input id="feature-turn-controls" type="checkbox" /><span><strong>Advanced turn controls</strong><small>Copy/edit reasoning and edit or remove individual malformed tool requests without deleting their assistant turn.</small></span></label>
+            <label class="feature-row" data-feature-group="presentation"><input id="feature-transcript-navigator" type="checkbox" /><span><strong>Timeline + search</strong><small>Open a color-coded jump bar and fuzzy transcript search; quote a phrase for exact matching.</small></span></label>
           </div>
           <div class="matrix-actions">
             <button id="feature-enable-all" type="button">Enable all</button>
-            <button id="feature-disable-all" type="button">Disable all</button>
+            <button id="feature-disable-all" type="button">Clear all</button>
           </div>
         </details>
 
@@ -193,8 +197,8 @@
 
     <dialog id="edit-dialog">
       <form method="dialog" class="dialog-card">
-        <h2>Edit transcript message</h2>
-        <p class="hint">The edited text becomes the exact context sent on future turns.</p>
+        <h2 id="edit-dialog-title">Edit transcript message</h2>
+        <p id="edit-dialog-hint" class="hint">The edited text becomes the exact context sent on future turns.</p>
         <textarea id="edit-content" rows="14"></textarea>
         <div class="dialog-actions">
           <button value="cancel">Cancel</button>
@@ -221,9 +225,15 @@
         <h2>Context</h2>
         <p id="context-detail" class="hint"></p>
         <div id="context-timeline" class="context-timeline" aria-label="Conversation timeline"></div>
+        <section id="transcript-search-section" class="transcript-search" hidden>
+          <label for="transcript-search">Search this transcript</label>
+          <input id="transcript-search" type="search" placeholder="Fuzzy words, or “an exact phrase”" autocomplete="off" />
+          <div id="transcript-search-results" class="transcript-search-results" aria-live="polite"></div>
+        </section>
         <div id="compaction-controls">
           <div class="context-actions">
             <button id="compact-soft" type="button">Soft · index Firecrawl</button>
+            <button id="compact-context-reads" type="button">Soft · collapse context reads</button>
             <button id="compact-normal" class="primary" type="button">Normal · summarize selected</button>
             <button id="restore-context" type="button">Restore originals</button>
           </div>
@@ -232,7 +242,9 @@
           <div class="panel-heading compact-heading">
             <h3>Select exact entries for Normal compaction</h3>
             <button id="select-older-context" type="button">Select older</button>
+            <button id="clear-context-selection" type="button">Clear selection</button>
           </div>
+          <p class="hint">Drag across boxes to paint a selection. Shift-click selects every available entry of the same role or tool type.</p>
           <div id="compaction-messages" class="compaction-list"></div>
           <div id="active-compaction" class="active-compaction"></div>
         </div>
@@ -252,7 +264,10 @@
           <button id="close-workspace" type="button" aria-label="Close workspace">×</button>
         </div>
         <section id="todo-workspace-section" class="workspace-section">
-          <h3>TODO</h3>
+          <div class="workspace-section-heading">
+            <h3>TODO</h3>
+            <button id="clear-todos-except-recent" type="button">Clear all but recent</button>
+          </div>
           <div id="todo-list" class="todo-list"></div>
           <div class="workspace-add-row">
             <input id="todo-input" type="text" placeholder="Add a task" />

@@ -152,17 +152,38 @@ test("conversation Markdown includes reasoning, attachments, and collapsed tool 
   const markdown = conversationMarkdown({
     title: "Saved chat",
     model: "model-a",
-    attachments: [{ id: "a", name: "file.txt" }],
+    attachments: [{ id: "a", name: "file.txt", type: "text/plain", size: 4, kind: "text", text: "body", dataUrl: "data:text/plain;base64,Ym9keQ==" }],
     messages: [
-      createMessage("user", "Question", { attachments: ["a"] }),
-      createMessage("assistant", "Answer", { reasoning: "Thought" }),
+      createMessage("user", "Question", { id: "u", attachments: ["a"] }),
+      createMessage("assistant", "Answer", { id: "a", reasoning: "Thought", toolCalls: [{ id: "x", function: { name: "lookup", arguments: '{"query":"value"}' } }] }),
       createMessage("tool", "Result", { toolCallId: "x", name: "lookup" }),
     ],
+    compactions: [{ id: "compact-1", mode: "normal", messageIds: ["u", "a"], summary: "Short projection", searchTerms: ["question", "answer"], active: true }],
   });
   assert.match(markdown, /^# Saved chat/m);
-  assert.match(markdown, /Attachments: `file\.txt`/);
-  assert.match(markdown, /<details><summary>Reasoning<\/summary>/);
-  assert.match(markdown, /<details><summary>Tool · lookup<\/summary>/);
+  assert.match(markdown, /Attachments · exact chat references/);
+  assert.match(markdown, /Download exact attachment bytes/);
+  assert.match(markdown, /<details><summary>Reasoning · 7 characters<\/summary>/);
+  assert.match(markdown, /<details><summary>Tool request · lookup · x<\/summary>/);
+  assert.match(markdown, /<details><summary>Tool result · lookup · x<\/summary>/);
+  assert.match(markdown, /Active Normal summary · 2 originals · compact-1/);
+  assert.match(markdown, /Searchable values: `question`, `answer`/);
+  assert.match(markdown, /Question/);
+  assert.match(markdown, /Answer/);
+
+  const baseline = conversationMarkdown({
+    title: "Saved chat",
+    model: "model-a",
+    attachments: [{ id: "a", name: "file.txt", type: "text/plain", size: 4, kind: "text", text: "body", dataUrl: "data:text/plain;base64,Ym9keQ==" }],
+    messages: [
+      createMessage("user", "Question", { id: "u", attachments: ["a"] }),
+      createMessage("assistant", "Answer", { id: "a", reasoning: "Thought", toolCalls: [{ id: "x", function: { name: "lookup", arguments: '{"query":"value"}' } }] }),
+      createMessage("tool", "Result", { toolCallId: "x", name: "lookup" }),
+    ],
+    compactions: [{ id: "compact-1", mode: "normal", messageIds: ["u", "a"], summary: "Short projection", active: true }],
+  }, { complete: false });
+  assert.doesNotMatch(baseline, /Context records|Short projection|Tool request/);
+  assert.match(baseline, /Attachments: `file\.txt`/);
 });
 
 test("rejects malformed tool messages, multimodal imports, and future versions", () => {

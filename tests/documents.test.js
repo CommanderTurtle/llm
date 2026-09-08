@@ -9,7 +9,15 @@ import {
   lineHash,
   lintDocument,
   putBrowserDocument,
+  documentDraftFromResponse,
 } from "../src/documents.js";
+
+test("a response-backed PUT stores everything before a final standalone DONE line", () => {
+  assert.equal(documentDraftFromResponse("# Release notes\n\nComplete body.\nDONE"), "# Release notes\n\nComplete body.");
+  assert.equal(documentDraftFromResponse("DONE is ordinary prose.\n\nDONE   "), "DONE is ordinary prose.\n");
+  assert.throws(() => documentDraftFromResponse("# Incomplete\n\nNo terminal marker"), /final line containing only DONE/);
+  assert.throws(() => documentDraftFromResponse("DONE"), /did not contain document text/);
+});
 
 test("hashline documents require a current read receipt before editing", () => {
   const documentValue = createBrowserDocument({ name: "notes.md", content: "alpha\nbeta" });
