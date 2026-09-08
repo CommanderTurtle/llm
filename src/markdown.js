@@ -8,6 +8,7 @@ let temmlPromise;
 let mermaidInitialized = false;
 
 function safeLink(value) {
+  if (/^#[A-Za-z0-9_-]+$/.test(value)) return { href: value, protocol: "fragment:" };
   try {
     const url = new URL(value);
     return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:" ? url : null;
@@ -50,8 +51,8 @@ async function renderMath(element, source, displayMode = false) {
 
 function appendInline(parent, text, options = {}) {
   const pattern = options.rich
-    ? /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^)\n]+\)|<https?:\/\/[^>\n]+>|\$(?!\s)(?:\\.|[^$\n])+(?<!\s)\$)/g
-    : /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^)\n]+\)|<https?:\/\/[^>\n]+>)/g;
+    ? /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\((?:https?:\/\/|mailto:|#)[^)\n]+\)|<https?:\/\/[^>\n]+>|\$(?!\s)(?:\\.|[^$\n])+(?<!\s)\$)/g
+    : /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\((?:https?:\/\/|mailto:|#)[^)\n]+\)|<https?:\/\/[^>\n]+>)/g;
   let cursor = 0;
 
   for (const match of text.matchAll(pattern)) {
@@ -85,6 +86,14 @@ function appendInline(parent, text, options = {}) {
         if (url.protocol === "http:" || url.protocol === "https:") {
           anchor.target = "_blank";
           anchor.rel = "noopener noreferrer";
+        } else if (url.protocol === "fragment:") {
+          anchor.addEventListener("click", (event) => {
+            const target = document.getElementById(url.href.slice(1));
+            if (!target) return;
+            event.preventDefault();
+            if (target instanceof HTMLDetailsElement) target.open = true;
+            target.scrollIntoView({ block: "start" });
+          });
         }
         parent.append(anchor);
       }

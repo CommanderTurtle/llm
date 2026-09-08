@@ -2,7 +2,13 @@ import { formatAttachmentSize, prepareAttachment } from "./attachments.js";
 import {
   compactionEnvelope,
   createContextResource,
+  markResourceSectionRead,
   resourceIndex,
+  resourceSearchMarkdown,
+  resourceSectionAnchor,
+  resourceSectionImage,
+  resourceSectionMeta,
+  resourceSectionText,
   sessionContextStats,
   timelineMarkdown,
 } from "./context.js";
@@ -45,7 +51,9 @@ import {
   PUT_INSTRUCTIONS_TOOL_NAME,
   READ_DOCUMENT_TOOL_NAME,
   READ_INSTRUCTIONS_TOOL_NAME,
+  RESOURCE_SEARCH_TOOL_NAME,
   TODO_TOOL_NAME,
+  VIEW_IMAGE_TOOL_NAME,
 } from "./tools.js";
 import {
   activeSession,
@@ -141,6 +149,7 @@ const elements = {
   toolDialog: document.querySelector("#tool-dialog"),
   toolDialogName: document.querySelector("#tool-dialog-name"),
   toolDialogArguments: document.querySelector("#tool-dialog-arguments"),
+  toolDialogContext: document.querySelector("#tool-dialog-context"),
   contextDialog: document.querySelector("#context-dialog"),
   contextDetail: document.querySelector("#context-detail"),
   contextTimeline: document.querySelector("#context-timeline"),
@@ -182,6 +191,9 @@ const state = {
   readReceipts: new Map(),
   connected: false,
   renderFrame: 0,
+  renderTimer: 0,
+  renderTarget: null,
+  lastContextRenderAt: 0,
   toastTimer: 0,
   editMessageId: "",
   mcpConnections: new Map(),
@@ -189,6 +201,7 @@ const state = {
   storageReady: false,
   selectedDocumentId: "",
   approvalTail: Promise.resolve(),
+  approvedImageLoads: new Set(),
 };
 
 const featureControls = {
@@ -221,9 +234,9 @@ function deriveLocalTools() {
   };
 }
 
-const persist = makeDebouncedSaver(async (documentValue) => {
+const persist = makeDebouncedSaver(async (workspaceValue) => {
   try {
-    await saveWorkspace(documentValue);
+    await saveWorkspace(workspaceDocument(workspaceValue));
     elements.storageStatus.textContent = `Saved locally · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   } catch (error) {
     elements.storageStatus.textContent = `Local save failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -250,7 +263,7 @@ function queueSave() {
   if (!state.storageReady) return;
   state.workspace.savedAt = new Date().toISOString();
   elements.storageStatus.textContent = "Saving locally…";
-  persist(workspaceDocument(state.workspace));
+  persist(state.workspace);
 }
 
 function setConnection(stateName, label, detail = "") {
@@ -558,10 +571,48 @@ function attachmentCard(attachment) {
   return card;
 }
 
+function scrapedImageCard(message) {
+  const viewed = message.meta?.viewImage;
+  if (!viewed?.url) return null;
+  const figure = document.createElement("figure");
+  figure.className = "scraped-image";
+  const media = document.createElement("div");
+  media.className = "scraped-image-media";
+  const load = () => {
+    const image = document.createElement("img");
+    image.src = viewed.url;
+    image.alt = viewed.alt || viewed.heading || "Scraped image";
+    image.referrerPolicy = "no-referrer";
+    image.decoding = "async";
+    image.loading = "eager";
+    media.replaceChildren(image);
+    state.approvedImageLoads.add(message.id);
+  };
+  if (state.approvedImageLoads.has(message.id)) load();
+  else {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Load viewed image";
+    button.addEventListener("click", load);
+    media.append(button);
+  }
+  const caption = document.createElement("figcaption");
+  const label = document.createElement("span");
+  label.textContent = `Section ${viewed.section}${viewed.heading ? ` · ${viewed.heading}` : ""} · `;
+  const source = document.createElement("a");
+  source.href = viewed.sourceUrl || viewed.url;
+  source.target = "_blank";
+  source.rel = "noopener noreferrer";
+  source.textContent = "Source";
+  caption.append(label, source);
+  figure.append(media, caption);
+  return figure;
+}
+
 function renderMessage(message) {
   const current = session();
   const attachmentMap = new Map(current.attachments.map((item) => [item.id, item]));
-  const resource = featureEnabled("compaction") && message.meta?.resourceId
+  const resource = (featureEnabled("compaction") || featureEnabled("readTools")) && message.meta?.resourceId
     ? current.resources.find((item) => item.id === message.meta.resourceId)
     : null;
   const article = document.createElement("article");
@@ -647,11 +698,12 @@ function renderMessage(message) {
 
   const body = document.createElement("div");
   body.className = "message-body";
+  if (resource?.sections.length === 1) body.id = resourceSectionAnchor(resource.id, 0);
   const displayedContent = resource ? resourceIndex(resource) : message.content;
   if (displayedContent) {
     if (message.role === "assistant" || message.role === "tool") {
       body.append(renderMarkdown(displayedContent, {
-        rich: featureEnabled("richMarkdown"),
+        rich: featureEnabled("richMarkdown") && message.state !== "streaming",
         diagrams: message.state !== "streaming",
         onCopy: (ok, error) => toast(ok ? "Code copied" : error?.message ?? "Copy failed"),
       }));
@@ -669,14 +721,21 @@ function renderMessage(message) {
   }
   article.append(body);
 
+  const viewedImage = state.workspace.integrations.localTools.context ? scrapedImageCard(message) : null;
+  if (viewedImage) article.append(viewedImage);
+
   if (resource && resource.sections.length > 1) {
     const list = document.createElement("div");
     list.className = "resource-sections";
     resource.sections.forEach((section, index) => {
       const details = document.createElement("details");
       details.dataset.viewKey = `resource-${resource.id}-${index}`;
+      details.id = resourceSectionAnchor(resource.id, index);
       const summary = document.createElement("summary");
-      summary.textContent = `Section ${index + 1} · ${section.length.toLocaleString()} characters`;
+      const sectionMeta = resourceSectionMeta(resource, index);
+      const tags = sectionMeta.tags.length ? ` · ${sectionMeta.tags.join(", ")}` : "";
+      const images = sectionMeta.images.length ? ` · ${sectionMeta.images.length} image${sectionMeta.images.length === 1 ? "" : "s"}` : "";
+      summary.textContent = `Section ${index + 1} · ${section.length.toLocaleString()} characters${tags}${images}`;
       const content = document.createElement("div");
       content.className = "message-body";
       content.append(renderMarkdown(section, { rich: featureEnabled("richMarkdown"), diagrams: false, onCopy: (ok) => ok && toast("Code copied") }));
@@ -704,7 +763,11 @@ function renderMessage(message) {
 }
 
 function renderMessages() {
+  if (state.renderTimer) window.clearTimeout(state.renderTimer);
+  if (state.renderFrame) window.cancelAnimationFrame(state.renderFrame);
+  state.renderTimer = 0;
   state.renderFrame = 0;
+  state.renderTarget = null;
   const current = session();
   const distance = elements.messages.scrollHeight - elements.messages.scrollTop - elements.messages.clientHeight;
   const preserveScroll = featureEnabled("stableScroll");
@@ -749,7 +812,10 @@ function renderMessages() {
   elements.stats.textContent = `${visible} message${visible === 1 ? "" : "s"}`;
   if (follow) elements.messages.scrollTop = elements.messages.scrollHeight;
   else if (preserveScroll) elements.messages.scrollTop = previousScrollTop;
-  if (featureEnabled("contextMeter") || featureEnabled("compaction")) renderContextMeter();
+  if (featureEnabled("contextMeter") || featureEnabled("compaction")) {
+    renderContextMeter();
+    state.lastContextRenderAt = performance.now();
+  }
 }
 
 function activeCompactionFor(current) {
@@ -795,8 +861,62 @@ function maybeOfferCompaction(current) {
   if (current.id === session().id) toast(`Context is about ${Math.round(stats.percent)}% full. Open the context ring to choose Soft or Normal compaction.`, 7_000);
 }
 
-function scheduleRender() {
-  if (!state.renderFrame) state.renderFrame = window.requestAnimationFrame(renderMessages);
+function renderStreamingMessage(target) {
+  const current = session();
+  if (!target || target.sessionId !== current.id) return;
+  const message = current.messages.find((item) => item.id === target.messageId);
+  const existing = elements.messages.querySelector(`article[data-message-id="${CSS.escape(target.messageId)}"]`);
+  if (!message || !existing) { renderMessages(); return; }
+
+  const distance = elements.messages.scrollHeight - elements.messages.scrollTop - elements.messages.clientHeight;
+  const preserveScroll = featureEnabled("stableScroll");
+  const follow = preserveScroll ? distance < 140 : true;
+  const previousScrollTop = elements.messages.scrollTop;
+  const disclosureState = new Map();
+  if (preserveScroll) {
+    for (const details of existing.querySelectorAll("details[data-view-key]")) {
+      const pre = details.querySelector("pre");
+      disclosureState.set(details.dataset.viewKey, {
+        open: details.open,
+        scrollTop: pre?.scrollTop ?? 0,
+        scrollLeft: pre?.scrollLeft ?? 0,
+      });
+    }
+  }
+
+  const replacement = renderMessage(message);
+  existing.replaceWith(replacement);
+  if (preserveScroll) {
+    for (const details of replacement.querySelectorAll("details[data-view-key]")) {
+      const saved = disclosureState.get(details.dataset.viewKey);
+      if (!saved) continue;
+      details.open = saved.open;
+      const pre = details.querySelector("pre");
+      if (pre) { pre.scrollTop = saved.scrollTop; pre.scrollLeft = saved.scrollLeft; }
+    }
+  }
+  if (follow) elements.messages.scrollTop = elements.messages.scrollHeight;
+  else elements.messages.scrollTop = previousScrollTop;
+
+  if ((featureEnabled("contextMeter") || featureEnabled("compaction"))
+      && performance.now() - state.lastContextRenderAt >= 500) {
+    renderContextMeter();
+    state.lastContextRenderAt = performance.now();
+  }
+}
+
+function scheduleRender(current, message) {
+  state.renderTarget = { sessionId: current.id, messageId: message.id };
+  if (state.renderTimer || state.renderFrame) return;
+  state.renderTimer = window.setTimeout(() => {
+    state.renderTimer = 0;
+    state.renderFrame = window.requestAnimationFrame(() => {
+      state.renderFrame = 0;
+      const target = state.renderTarget;
+      state.renderTarget = null;
+      renderStreamingMessage(target);
+    });
+  }, 32);
 }
 
 function renderPendingAttachments() {
@@ -871,7 +991,7 @@ function renderMcpList() {
 }
 
 function updateToolCount() {
-  const count = openAiTools(state.workspace.integrations, state.mcpConnections).length;
+  const count = openAiTools(state.workspace.integrations, state.mcpConnections, { resources: session().resources }).length;
   elements.toolCount.textContent = `${count} browser tool${count === 1 ? "" : "s"}`;
 }
 
@@ -947,13 +1067,63 @@ function requestBody(model, messages, parameters, tools) {
   return body;
 }
 
-function approveToolCall(call, signal) {
+function resourceImageSelection(current, args) {
+  const resource = current.resources.find((item) => item.id === args.resource_id);
+  if (!resource) throw new Error(`Resource ${args.resource_id || "(missing id)"} was not found.`);
+  const sectionNumber = Math.trunc(Number(args.section));
+  if (sectionNumber < 1 || sectionNumber > resource.sections.length) {
+    throw new Error(`Resource ${resource.id} has sections 1-${resource.sections.length}.`);
+  }
+  const meta = resourceSectionMeta(resource, sectionNumber - 1);
+  const image = resourceSectionImage(resource, sectionNumber - 1, args.url);
+  if (!image) throw new Error(`The requested image is not present in ${resource.id} section ${sectionNumber}.`);
+  return {
+    resource,
+    section: sectionNumber,
+    heading: meta.heading,
+    tags: meta.tags,
+    excerpt: resource.sections[sectionNumber - 1].replace(/\s+/g, " ").trim().slice(0, 320),
+    image,
+    sourceUrl: image.sourceUrl || meta.sourceUrl || resource.sourceUrl || image.url,
+  };
+}
+
+function renderToolApprovalContext(call, current) {
+  elements.toolDialogContext.hidden = true;
+  elements.toolDialogContext.replaceChildren();
+  if (call.function.name !== VIEW_IMAGE_TOOL_NAME) return;
+  try {
+    const selected = resourceImageSelection(current, parseToolArguments(call.function.arguments));
+    const sourceLine = document.createElement("p");
+    sourceLine.append("Source: ");
+    const source = document.createElement("a");
+    source.href = selected.sourceUrl;
+    source.target = "_blank";
+    source.rel = "noopener noreferrer";
+    source.textContent = selected.sourceUrl;
+    sourceLine.append(source);
+    const subsection = document.createElement("p");
+    subsection.textContent = `Subsection: section ${selected.section}/${selected.resource.sections.length}${selected.heading ? ` · ${selected.heading}` : ""}${selected.tags.length ? ` · ${selected.tags.join(", ")}` : ""}`;
+    const excerpt = document.createElement("blockquote");
+    excerpt.textContent = selected.excerpt || "(empty section)";
+    elements.toolDialogContext.append(sourceLine, subsection, excerpt);
+  } catch (error) {
+    const invalid = document.createElement("p");
+    invalid.className = "message-error";
+    invalid.textContent = error instanceof Error ? error.message : String(error);
+    elements.toolDialogContext.append(invalid);
+  }
+  elements.toolDialogContext.hidden = false;
+}
+
+function approveToolCall(call, signal, current) {
   if (state.workspace.integrations.approval === "always") return Promise.resolve(true);
   const show = () => new Promise((resolve) => {
     if (signal?.aborted) { resolve(false); return; }
     elements.toolDialogName.textContent = call.function.name;
     try { elements.toolDialogArguments.textContent = JSON.stringify(parseToolArguments(call.function.arguments), null, 2); }
     catch { elements.toolDialogArguments.textContent = call.function.arguments; }
+    renderToolApprovalContext(call, current);
     elements.toolDialog.returnValue = "";
     const close = () => {
       signal?.removeEventListener("abort", abort);
@@ -987,6 +1157,30 @@ function findDocument(current, name) {
 }
 
 function executeBrowserTool(current, name, args) {
+  if (name === VIEW_IMAGE_TOOL_NAME) {
+    const selected = resourceImageSelection(current, args);
+    return {
+      content: `Rendered image from ${selected.resource.name}, section ${selected.section}.\n\nImage: ${selected.image.url}\nSource: ${selected.sourceUrl}`,
+      meta: {
+        viewImage: {
+          url: selected.image.url,
+          alt: selected.image.alt,
+          sourceUrl: selected.sourceUrl,
+          resourceId: selected.resource.id,
+          section: selected.section,
+          heading: selected.heading,
+        },
+      },
+    };
+  }
+
+  if (name === RESOURCE_SEARCH_TOOL_NAME) {
+    const resource = current.resources.find((item) => item.id === args.resource_id);
+    if (!resource) throw new Error(`Resource ${args.resource_id || "(missing id)"} was not found.`);
+    if (!resource.readSections?.length) throw new Error(`Read a section of ${resource.id} with context_read before searching it.`);
+    return resourceSearchMarkdown(resource, args.query);
+  }
+
   if (name === TODO_TOOL_NAME) {
     const action = args.action || "list";
     if (action === "list") return todoMarkdown(current);
@@ -1036,7 +1230,14 @@ function executeBrowserTool(current, name, args) {
       if (!resource) throw new Error(`Resource ${args.id || "(missing id)"} was not found.`);
       const section = Math.trunc(Number(args.section) || 1);
       if (section < 1 || section > resource.sections.length) throw new Error(`Resource ${resource.id} has sections 1-${resource.sections.length}.`);
-      return `# ${resource.name} · section ${section}/${resource.sections.length}\n\n${resource.sections[section - 1]}`;
+      const readCount = resource.readSections?.length ?? 0;
+      markResourceSectionRead(resource, section - 1);
+      if (resource.readSections.length !== readCount) {
+        touchSession(current);
+        queueSave();
+        if (current.id === session().id) updateToolCount();
+      }
+      return resourceSectionText(resource, section - 1);
     }
     throw new Error(`Unsupported context kind ${args.kind}.`);
   }
@@ -1078,7 +1279,7 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
   let imageOverrides = new Map();
   let continuationTarget = options.continuationTarget ?? null;
   while (!controller.signal.aborted) {
-    const tools = openAiTools(state.workspace.integrations, state.mcpConnections);
+    const tools = openAiTools(state.workspace.integrations, state.mcpConnections, { resources: current.resources });
     const continuing = continuationTarget;
     const continuationReasoningIds = continuing?.reasoning ? new Set([continuing.id]) : new Set();
     const outbound = projectedMessages(current, imageOverrides, continuationReasoningIds);
@@ -1115,7 +1316,7 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
                 currentAssistant.content += delta.content;
                 currentAssistant.reasoning += delta.reasoning;
                 if (delta.toolCalls) currentAssistant.toolCalls = structuredClone(delta.toolCalls);
-                if (current.id === session().id) scheduleRender();
+                if (current.id === session().id) scheduleRender(current, currentAssistant);
                 if (performance.now() - lastSaveAt > 2_000) {
                   lastSaveAt = performance.now();
                   queueSave();
@@ -1211,45 +1412,54 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
       let resultState = "complete";
       const toolMeta = {};
       try {
-        const allowed = await approveToolCall(call, controller.signal);
+        const allowed = await approveToolCall(call, controller.signal, current);
         if (!allowed) throw new Error("The user denied this tool call.");
         if (current.id === session().id) {
           elements.attachmentStatus.hidden = false;
           elements.attachmentStatus.textContent = `Running ${call.function.name}…`;
         }
-        content = await executeTool(call, {
+        const execution = await executeTool(call, {
           attachments: current.attachments,
           integrations: state.workspace.integrations,
+          resources: current.resources,
           mcpConnections: state.mcpConnections,
           signal: controller.signal,
           executeLocalTool: (name, args) => executeBrowserTool(current, name, args),
-          storeResource: featureEnabled("compaction") ? function storeResource(value, additions) {
-            if (String(value).length < 24_000) return value;
+          storeResource(value, additions) {
             const resource = createContextResource(value, additions);
+            const hasImages = resource.sectionMeta.some((section) => section.images.length);
+            if (!state.workspace.integrations.localTools.context
+                || (!hasImages && (!featureEnabled("compaction") || String(value).length < 24_000))) return value;
             current.resources.push(resource);
             toolMeta.resourceId = resource.id;
             return value;
-          } : undefined,
+          },
           onProgress(status, progress) {
             const suffix = progress ? ` · ${Math.round(progress * 100)}%` : "";
             if (current.id === session().id) elements.attachmentStatus.textContent = `${call.function.name}: ${status}${suffix}`;
           },
         });
+        if (execution && typeof execution === "object" && typeof execution.content === "string") {
+          content = execution.content;
+          if (execution.meta && typeof execution.meta === "object") Object.assign(toolMeta, execution.meta);
+        } else content = String(execution ?? "");
       } catch (error) {
         resultState = "error";
         content = `Tool error: ${error instanceof Error ? error.message : String(error)}`;
       } finally {
         if (current.id === session().id) elements.attachmentStatus.hidden = true;
       }
-      current.messages.push(createMessage("tool", content, {
+      const toolMessage = createMessage("tool", content, {
         state: resultState,
         toolCallId: call.id,
         name: call.function.name,
         meta: toolMeta,
-      }));
+      });
+      current.messages.push(toolMessage);
+      if (toolMeta.viewImage) state.approvedImageLoads.add(toolMessage.id);
       touchSession(current);
       queueSave();
-      if (current.id === session().id) renderMessages();
+      if (current.id === session().id) { updateToolCount(); renderMessages(); }
     }
   }
 }
