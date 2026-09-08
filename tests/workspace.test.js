@@ -114,6 +114,19 @@ test("multiple active compaction groups and image reads survive workspace round 
   assert.equal(restored.sessions[0].activeCompactionId, "c2");
 });
 
+test("automatic Soft recovery choices are per-session and persist", () => {
+  const restored = parseWorkspaceDocument(workspaceDocument(createWorkspace({
+    sessions: [
+      { id: "automatic", autoCompaction: { firecrawl: true, contextReads: true } },
+      { id: "manual", autoCompaction: { firecrawl: false, contextReads: false } },
+    ],
+  })));
+  assert.deepEqual(restored.sessions.map((session) => session.autoCompaction), [
+    { firecrawl: true, contextReads: true },
+    { firecrawl: false, contextReads: false },
+  ]);
+});
+
 test("Auto output allowance is globally consistent with its feature checkbox", () => {
   const automatic = createWorkspace({
     sessions: [{ parameters: { maxTokens: 1234 } }, { parameters: { maxTokens: 5678 } }],

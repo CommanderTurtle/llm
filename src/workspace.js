@@ -192,6 +192,13 @@ function normalizedCompaction(value) {
   };
 }
 
+function normalizedAutoCompaction(value = {}) {
+  return {
+    firecrawl: value?.firecrawl === true,
+    contextReads: value?.contextReads === true,
+  };
+}
+
 function normalizedUndo(value) {
   if (!value || typeof value !== "object" || value.type !== "delete-message" || !Array.isArray(value.messages)) return null;
   return {
@@ -244,6 +251,7 @@ export function createSession(additions = {}, options = {}) {
       ? requestedCompaction
       : compactions.filter((item) => item.active).at(-1)?.id ?? "",
     compactionPrompt: typeof additions.compactionPrompt === "string" ? additions.compactionPrompt : "",
+    autoCompaction: normalizedAutoCompaction(additions.autoCompaction),
     contextOfferAt: Math.max(0, Math.trunc(Number(additions.contextOfferAt) || 0)),
     undo: Array.isArray(additions.undo) ? additions.undo.map(normalizedUndo).filter(Boolean).slice(-20) : [],
     draft: typeof additions.draft === "string" ? additions.draft : "",
