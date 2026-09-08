@@ -7,6 +7,7 @@ import {
   compactionEnvelopes,
   compactionSearchTerms,
   createContextResource,
+  isContextLimitError,
   markResourceSectionRead,
   resourceIndex,
   resourceSearchMarkdown,
@@ -68,6 +69,13 @@ test("context estimates report a bounded percentage", () => {
   assert.ok(stats.tokens > 0);
   assert.equal(stats.contextWindow, 10);
   assert.ok(stats.percent > 0);
+});
+
+test("context-limit errors are distinguished from ordinary endpoint failures", () => {
+  assert.equal(isContextLimitError(new Error("This model's maximum context length is 32768 tokens, but you requested 40960 tokens.")), true);
+  assert.equal(isContextLimitError({ message: "You requested 8192 output tokens but have 2048 context tokens available." }), true);
+  assert.equal(isContextLimitError(new Error("Local model endpoint returned HTTP 500.")), false);
+  assert.equal(isContextLimitError(new Error("The request timed out after 300 seconds.")), false);
 });
 
 test("an active lossless compaction reports its projected context instead of stale server usage", () => {

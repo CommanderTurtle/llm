@@ -232,8 +232,14 @@
         </section>
         <div id="compaction-controls">
           <div class="context-actions">
-            <button id="compact-soft" type="button">Soft · index Firecrawl</button>
-            <button id="compact-context-reads" type="button">Soft · collapse context reads</button>
+            <span class="context-action">
+              <button id="compact-soft" type="button">Soft · index Firecrawl</button>
+              <label class="context-auto" title="On the first context-limit error, run this Soft action and Continue."><input id="auto-compact-soft" type="checkbox" /> Auto</label>
+            </span>
+            <span class="context-action">
+              <button id="compact-context-reads" type="button">Soft · collapse context reads</button>
+              <label class="context-auto" title="On the first context-limit error, run this Soft action and Continue."><input id="auto-compact-context-reads" type="checkbox" /> Auto</label>
+            </span>
             <button id="compact-normal" class="primary" type="button">Normal · summarize selected</button>
             <button id="restore-context" type="button">Restore originals</button>
           </div>

@@ -18,6 +18,16 @@ export function estimateTokens(value) {
   return Math.max(1, Math.ceil(Math.max(bytes / 4, words * 0.72)));
 }
 
+export function isContextLimitError(value) {
+  const source = value && typeof value === "object"
+    ? [value.message, value.detail, value.cause?.message].filter(Boolean).join("\n")
+    : String(value ?? "");
+  if (!/\btokens?\b/i.test(source)) return false;
+  const namesContextLimit = /\b(?:context(?:\s+(?:window|length))?|maximum\s+(?:model(?:'s)?\s+)?(?:context\s+)?length|max(?:imum)?[_ -]?model[_ -]?len)\b/i.test(source);
+  const describesOverflow = /\b(?:request(?:ed|ing)?|requires?|exceeds?|available|reduce|too\s+(?:many|long|large)|limit|maximum)\b/i.test(source);
+  return namesContextLimit && describesOverflow;
+}
+
 export function sessionContextStats(session, projectedMessages = null) {
   const projection = projectedMessages ?? session.messages ?? [];
   const estimatedTokens = estimateTokens(projection);

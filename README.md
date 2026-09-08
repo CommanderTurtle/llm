@@ -44,7 +44,7 @@ Every enhancement below starts disabled and is saved in browser state. **Clear a
 | Vision resize recovery | On an image-dimension `ValueError`, retries the request with browser-only projections reduced by exactly 128 pixels on the longest side until accepted. Stored originals never change. |
 | Stable streaming scroll | Follows output only while near the bottom. The growing reasoning node is retained in place, so its disclosure state, selection, and independent scroll position are not destroyed by a new delta. |
 | Context meter | Shows a per-session token estimate against the model-advertised or manually entered context window. |
-| Composable context controls | Enables separate Soft actions for Firecrawl indexing and completed context-read collapse, plus user-selected Normal summarization. Each new group composes with earlier active groups instead of reopening them; exact originals stay stored and can be restored independently or together. Indexed sections carry at most two comma-delimited `code`, `table`, or `html_gibberish` tags. |
+| Composable context controls | Enables separate Soft actions for Firecrawl indexing and completed context-read collapse, plus user-selected Normal summarization. Each Soft action has a per-chat **Auto** checkbox: on the first context-limit error, enabled actions run and the existing Continue path retries once. Each new group composes with earlier active groups instead of reopening them; exact originals stay stored and can be restored independently or together. Indexed sections carry at most two comma-delimited `code`, `table`, or `html_gibberish` tags. |
 | Scraped image reads | Exposes source-bound `view_image` only for image URLs discovered in earlier stored Firecrawl results. The approval view shows the source and subsection. |
 | Browser read tools | Lets the model read exact transcript/reasoning entries, resources, instructions, and editor documents. Reading a resource section unlocks indexed search for only that resource. |
 | Document write tools | Adds read-before-write, revisioned document and `instructions.md` PUT operations. A full document can be written as normal assistant Markdown ending with `DONE` on its own line, then stored with `from_response=true`; small changes retain the precise hashline path. |
@@ -130,6 +130,7 @@ MCP tools can be more privileged than this page. Approval controls whether the h
 - Compaction never deletes or overwrites a turn. Normal compaction adds a stateless model-generated summary projection; Soft compaction indexes Firecrawl output or collapses completed context-read request/result pairs. Active groups compose, carry deterministic searchable values, and share a color across their originals and summary card. The native entries, reasoning, resources, and revision history remain in the workspace and complete Markdown export.
 - Vision retries alter only the outbound in-memory image projection. The exact attached data URL remains in IndexedDB and state exports.
 - Rich renderer and a.shel.sh compression modules are vendored and loaded only after their feature is used.
+- Context totals are cached per chat and accrue only the newest streaming deltas; closed indexed-resource sections render on first open. Autosave writes the already-normalized workspace instead of reconstructing the full transcript graph.
 
 ## Develop and verify
 

@@ -65,6 +65,8 @@ This checklist is the implementation contract for the static `llm.shel.sh` harne
 - [x] Add browser-local undo for deleted turn groups, including the exact attachment bytes required to restore them.
 - [x] Add reasoning copy/edit, individual malformed tool-request editing/deletion, Continue on the latest assistant turn, and a color-coded fuzzy/exact transcript navigator.
 - [x] Reject forged calls to every disabled opt-in browser tool.
+- [x] Remove repeated full-transcript work from feature toggles, streaming context estimates, autosave normalization, closed resource disclosures, and per-line syntax detection.
+- [x] Add per-session Auto choices for both Soft actions and one-shot context-limit recovery through the existing Continue path.
 
 ## Verification record
 
@@ -74,3 +76,4 @@ This checklist is the implementation contract for the static `llm.shel.sh` harne
 - 2026-09-07: fresh-origin browser fixtures verified baseline connect/send, persisted all-disabled state, lazy highlighted code/math/Mermaid/task rendering, missing-final reasoning recovery through Continue, two simultaneous session streams, background-generation feature guards, TODOs, document revisions/diffs, reversible Normal compaction, exact long Firecrawl section projection, and zero browser warnings/errors.
 - 2026-09-08: a deterministic 80-delta browser stream verified stable assistant/reasoning node identity, preserved a user-positioned nested scrollbar while reasoning grew, collapsed exact context-read request/result pairs through Soft projection, and kept only the latest of two TODOs.
 - 2026-09-08: `bun run check` passed 70 tests across twelve files plus the 127-id DOM contract, all-disabled baseline, browser graph, and real AnyDoc WASM conversion. Clean browser fixtures verified response-backed `DONE` document storage, source-scoped scraped-image reads (including enabling them after an earlier scrape) and approval context, stacked Soft/Normal compactions with lower projected context and independent colors, group restore/reapply, exact and fuzzy transcript search, pointer-drag and grouped Shift selection, reasoning/tool-request editing, completed-turn Continue, complete Markdown export, and an empty browser console.
+- 2026-09-08: code audit removed the all-features main-thread multipliers without changing the 32 ms streaming paint path. `bun test` passed 72 tests, and the in-memory browser build, 129-id DOM contract, all-disabled baseline, and vendored AnyDoc conversion passed through `scripts/check.mjs`.

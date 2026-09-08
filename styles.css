@@ -293,6 +293,10 @@ dialog::backdrop { background: rgb(0 0 0 / 55%); }
 .dialog-title-row > button { min-width: 38px; font-size: 1.25rem; }
 .dialog-card > label { display: block; margin: 0.7rem 0 0.3rem; color: var(--muted); font-size: 0.78rem; font-weight: 650; }
 .context-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.65rem 0; }
+.context-action { display: inline-flex; align-items: stretch; }
+.context-action > button { border-radius: 6px 0 0 6px; }
+.context-auto { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-left: 0; border-radius: 0 6px 6px 0; color: var(--muted); font-size: 0.72rem; cursor: pointer; user-select: none; }
+.context-auto input { width: auto; margin: 0; }
 .compact-heading { padding-inline: 0; }
 .compact-heading h3 { margin: 0; font-size: 0.85rem; }
 .compaction-list { overflow: auto; max-height: 34vh; border: 1px solid var(--border); border-radius: 7px; }

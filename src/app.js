@@ -4,6 +4,8 @@ import {
   compactionEnvelopes,
   compactionSearchTerms,
   createContextResource,
+  estimateTokens,
+  isContextLimitError,
   markResourceSectionRead,
   resourceIndex,
   resourceSearchMarkdown,
@@ -66,7 +68,7 @@ import {
   LEGACY_WORKSPACE_SCHEMA,
   parseWorkspaceDocument,
   sessionFromConversation,
-  touchSession,
+  touchSession as markSessionUpdated,
   workspaceDocument,
   WORKSPACE_SCHEMA,
 } from "./workspace.js";
@@ -167,7 +169,9 @@ const elements = {
   transcriptSearchResults: document.querySelector("#transcript-search-results"),
   compactionControls: document.querySelector("#compaction-controls"),
   compactSoft: document.querySelector("#compact-soft"),
+  autoCompactSoft: document.querySelector("#auto-compact-soft"),
   compactContextReads: document.querySelector("#compact-context-reads"),
+  autoCompactContextReads: document.querySelector("#auto-compact-context-reads"),
   compactNormal: document.querySelector("#compact-normal"),
   restoreContext: document.querySelector("#restore-context"),
   compactionPrompt: document.querySelector("#compaction-prompt"),
@@ -217,7 +221,26 @@ const state = {
   selectedDocumentId: "",
   approvalTail: Promise.resolve(),
   approvedImageLoads: new Set(),
+  contextVersions: new Map(),
+  contextStats: new Map(),
 };
+
+const STREAM_CHECKPOINT_MS = 8_000;
+
+function invalidateContextStats(current) {
+  state.contextVersions.set(current.id, (state.contextVersions.get(current.id) ?? 0) + 1);
+  state.contextStats.delete(current.id);
+}
+
+function resetContextStats() {
+  state.contextVersions.clear();
+  state.contextStats.clear();
+}
+
+function touchSession(current, contextChanged = true) {
+  if (contextChanged) invalidateContextStats(current);
+  return markSessionUpdated(current);
+}
 
 const featureControls = {
   streamRecovery: elements.featureStreamRecovery,
@@ -244,11 +267,17 @@ function featureEnabled(name) {
 
 function hydrateScrapedImageResources(current) {
   current.resources ??= [];
+  const resourceIds = new Set(current.resources.map((resource) => resource.id));
+  const calls = new Map();
+  for (const message of current.messages ?? []) {
+    for (const call of message.toolCalls ?? []) calls.set(call.id, call);
+  }
+  let changed = false;
   for (const message of current.messages ?? []) {
     if (message.role !== "tool" || !["web_search", "web_scrape"].includes(message.name) || !message.content.trim()) continue;
-    if (message.meta?.resourceId && current.resources.some((resource) => resource.id === message.meta.resourceId)) continue;
-    const request = current.messages.find((candidate) => candidate.toolCalls?.some((call) => call.id === message.toolCallId));
-    const call = request?.toolCalls?.find((candidate) => candidate.id === message.toolCallId);
+    if (message.meta?.resourceId && resourceIds.has(message.meta.resourceId)) continue;
+    if (message.meta?.imageResourceScanned) continue;
+    const call = calls.get(message.toolCallId);
     let args = {};
     try { args = parseToolArguments(call?.function?.arguments); } catch { /* The stored result remains usable without request metadata. */ }
     const label = message.content.match(/^#{1,6}\s+(.+)$/m)?.[1] || "result";
@@ -258,10 +287,15 @@ function hydrateScrapedImageResources(current) {
       sourceTool: message.name,
       ...(message.name === "web_scrape" && args.url ? { sourceUrl: args.url } : {}),
     });
+    message.meta = { ...message.meta, imageResourceScanned: true };
+    changed = true;
     if (!resource.sectionMeta.some((section) => section.images.length)) continue;
     current.resources.push(resource);
-    message.meta = { ...message.meta, resourceId: resource.id };
+    resourceIds.add(resource.id);
+    message.meta.resourceId = resource.id;
   }
+  if (changed) invalidateContextStats(current);
+  return changed;
 }
 
 function deriveLocalTools() {
@@ -277,7 +311,9 @@ function deriveLocalTools() {
 
 const persist = makeDebouncedSaver(async (workspaceValue) => {
   try {
-    await saveWorkspace(workspaceDocument(workspaceValue));
+    // The live workspace is normalized on creation/import. Re-normalizing its full
+    // transcript and resource graph on every autosave doubles the main-thread walk.
+    await saveWorkspace(workspaceValue);
     elements.storageStatus.textContent = `Saved locally · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   } catch (error) {
     elements.storageStatus.textContent = `Local save failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -343,14 +379,14 @@ function writeParameters(parameters) {
   elements.enableThinking.checked = value.enableThinking;
 }
 
-function syncSessionFromForm() {
+function syncSessionFromForm(options = {}) {
   const current = session();
   current.endpoint = elements.endpoint.value.trim();
   current.model = elements.model.value.trim();
   current.systemPrompt = elements.systemPrompt.value;
   current.parameters = parametersFromForm();
   current.draft = elements.prompt.value;
-  touchSession(current);
+  touchSession(current, options.contextChanged === true);
 }
 
 function syncIntegrationsFromForm() {
@@ -502,7 +538,7 @@ function sessionMeta(value) {
   const count = value.messages.filter((message) => message.role !== "tool").length;
   const stamp = new Date(value.updatedAt);
   const time = Number.isNaN(stamp.valueOf()) ? "" : stamp.toLocaleDateString([], { month: "short", day: "numeric" });
-  const context = featureEnabled("contextMeter") ? ` · ~${sessionContextStats(value, projectedMessages(value)).tokens.toLocaleString()} tokens` : "";
+  const context = featureEnabled("contextMeter") ? ` · ~${contextStatsFor(value).tokens.toLocaleString()} tokens` : "";
   return `${count} message${count === 1 ? "" : "s"}${context}${time ? ` · ${time}` : ""}`;
 }
 
@@ -575,6 +611,8 @@ function deleteSession() {
   if (!window.confirm(`Delete “${current.title}” and its locally stored attachments?`)) return;
   const index = state.workspace.sessions.findIndex((item) => item.id === current.id);
   state.workspace.sessions.splice(index, 1);
+  state.contextVersions.delete(current.id);
+  state.contextStats.delete(current.id);
   if (!state.workspace.sessions.length) state.workspace.sessions.push(createSession());
   state.workspace.activeSessionId = state.workspace.sessions[Math.max(0, index - 1)]?.id ?? state.workspace.sessions[0].id;
   loadSessionIntoForm();
@@ -739,18 +777,17 @@ function updatePreformattedText(pre, value) {
   pre.scrollTop = followsTail ? pre.scrollHeight : scrollTop;
 }
 
-function renderMessage(message) {
-  const current = session();
-  const attachmentMap = new Map(current.attachments.map((item) => [item.id, item]));
+function renderMessage(message, renderContext) {
+  const { current, attachmentMap, resourceMap, compactionByMessage, latestContinuableId } = renderContext;
   const resource = (featureEnabled("compaction") || featureEnabled("readTools")) && message.meta?.resourceId
-    ? current.resources.find((item) => item.id === message.meta.resourceId)
+    ? resourceMap.get(message.meta.resourceId)
     : null;
   const article = document.createElement("article");
   article.className = "message";
   article.dataset.messageId = message.id;
   article.dataset.role = message.role;
   article.dataset.state = message.state;
-  const compaction = activeCompactionsFor(current).find((item) => item.messageIds.includes(message.id));
+  const compaction = compactionByMessage.get(message.id);
   if (compaction) {
     article.dataset.compactionId = compaction.id;
     article.style.setProperty("--compaction-color", compactionColor(compaction));
@@ -780,7 +817,7 @@ function renderMessage(message) {
   if (featureEnabled("streamRecovery")
       && message.role === "assistant"
       && message.state !== "streaming"
-      && latestContinuableAssistant(current)?.id === message.id) {
+      && latestContinuableId === message.id) {
     const resume = document.createElement("button");
     resume.type = "button";
     resume.textContent = "Continue";
@@ -817,39 +854,50 @@ function renderMessage(message) {
   body.className = "message-body";
   if (resource?.sections.length === 1) body.id = resourceSectionAnchor(resource.id, 0);
   const displayedContent = resource ? resourceIndex(resource) : message.content;
-  if (displayedContent) {
-    if (message.state === "streaming") {
-      const streaming = document.createElement("p");
-      streaming.className = "streaming-content";
-      streaming.textContent = displayedContent;
-      body.append(streaming);
-    } else if (message.role === "assistant" || message.role === "tool") {
-      body.append(renderMarkdown(displayedContent, {
-        rich: featureEnabled("richMarkdown") && message.state !== "streaming",
-        diagrams: message.state !== "streaming",
-        onCopy: (ok, error) => toast(ok ? "Code copied" : error?.message ?? "Copy failed"),
-      }));
-    } else {
-      const paragraph = document.createElement("p");
-      paragraph.style.whiteSpace = "pre-wrap";
-      paragraph.textContent = message.content;
-      body.append(paragraph);
+  const contextRead = message.role === "tool" && message.name === CONTEXT_TOOL_NAME && message.state !== "streaming";
+  let bodyRendered = false;
+  const renderBody = () => {
+    if (bodyRendered) return;
+    bodyRendered = true;
+    if (displayedContent) {
+      if (message.state === "streaming") {
+        const streaming = document.createElement("p");
+        streaming.className = "streaming-content";
+        streaming.textContent = displayedContent;
+        body.append(streaming);
+      } else if (message.role === "assistant" || message.role === "tool") {
+        body.append(renderMarkdown(displayedContent, {
+          rich: featureEnabled("richMarkdown") && message.state !== "streaming",
+          diagrams: message.state !== "streaming",
+          onCopy: (ok, error) => toast(ok ? "Code copied" : error?.message ?? "Copy failed"),
+        }));
+      } else {
+        const paragraph = document.createElement("p");
+        paragraph.style.whiteSpace = "pre-wrap";
+        paragraph.textContent = message.content;
+        body.append(paragraph);
+      }
+    } else if (message.state === "streaming") {
+      const waiting = document.createElement("p");
+      waiting.className = "hint";
+      waiting.textContent = message.reasoning ? "Waiting for final answer…" : message.toolCalls?.length ? "Preparing tool call…" : "Waiting for model…";
+      body.append(waiting);
     }
-  } else if (message.state === "streaming") {
-    const waiting = document.createElement("p");
-    waiting.className = "hint";
-    waiting.textContent = message.reasoning ? "Waiting for final answer…" : message.toolCalls?.length ? "Preparing tool call…" : "Waiting for model…";
-    body.append(waiting);
-  }
-  if (message.role === "tool" && message.name === CONTEXT_TOOL_NAME && message.state !== "streaming") {
+  };
+  if (contextRead) {
     const disclosure = document.createElement("details");
     disclosure.className = "context-read";
     disclosure.dataset.viewKey = "context-read";
     const summary = document.createElement("summary");
     summary.textContent = `Context read · ${message.content.length.toLocaleString()} characters`;
     disclosure.append(summary, body);
+    disclosure.addEventListener("toggle", () => { if (disclosure.open) renderBody(); });
+    disclosure.renderDeferredContent = renderBody;
     article.append(disclosure);
-  } else article.append(body);
+  } else {
+    renderBody();
+    article.append(body);
+  }
 
   const viewedImage = state.workspace.integrations.localTools.images ? scrapedImageCard(message) : null;
   if (viewedImage) article.append(viewedImage);
@@ -868,8 +916,15 @@ function renderMessage(message) {
       summary.textContent = `Section ${index + 1} · ${section.length.toLocaleString()} characters${tags}${images}`;
       const content = document.createElement("div");
       content.className = "message-body";
-      content.append(renderMarkdown(section, { rich: featureEnabled("richMarkdown"), diagrams: false, onCopy: (ok) => ok && toast("Code copied") }));
       details.append(summary, content);
+      let rendered = false;
+      const renderSection = () => {
+        if (rendered) return;
+        rendered = true;
+        content.append(renderMarkdown(section, { rich: featureEnabled("richMarkdown"), diagrams: false, onCopy: (ok) => ok && toast("Code copied") }));
+      };
+      details.addEventListener("toggle", () => { if (details.open) renderSection(); });
+      details.renderDeferredContent = renderSection;
       list.append(details);
     });
     article.append(list);
@@ -970,9 +1025,22 @@ function renderMessages() {
     fragment.append(elements.empty);
   } else {
     elements.empty.hidden = true;
+    const activeCompactions = activeCompactionsFor(current);
+    const messageIndexes = new Map(current.messages.map((message, index) => [message.id, index]));
+    const compactionByMessage = new Map();
+    for (const compaction of activeCompactions) {
+      for (const id of compaction.messageIds) compactionByMessage.set(id, compaction);
+    }
+    const renderContext = {
+      current,
+      attachmentMap: new Map(current.attachments.map((item) => [item.id, item])),
+      resourceMap: new Map(current.resources.map((item) => [item.id, item])),
+      compactionByMessage,
+      latestContinuableId: latestContinuableAssistant(current)?.id ?? "",
+    };
     const summariesAt = new Map();
-    for (const compaction of activeCompactionsFor(current)) {
-      const indexes = compaction.messageIds.map((id) => current.messages.findIndex((message) => message.id === id)).filter((index) => index >= 0);
+    for (const compaction of activeCompactions) {
+      const indexes = compaction.messageIds.map((id) => messageIndexes.get(id)).filter((index) => index != null);
       if (!indexes.length) continue;
       const last = Math.max(...indexes);
       const list = summariesAt.get(last) ?? [];
@@ -980,7 +1048,7 @@ function renderMessages() {
       summariesAt.set(last, list);
     }
     current.messages.forEach((message, index) => {
-      fragment.append(renderMessage(message));
+      fragment.append(renderMessage(message, renderContext));
       for (const compaction of summariesAt.get(index) ?? []) fragment.append(renderCompactionSummary(compaction));
     });
   }
@@ -991,6 +1059,7 @@ function renderMessages() {
         const saved = disclosureState.get(`${article.dataset.messageId}:${details.dataset.viewKey}`);
         if (!saved) continue;
         details.open = saved.open;
+        if (saved.open) details.renderDeferredContent?.();
         const pre = details.querySelector("pre");
         if (pre) { pre.scrollTop = saved.scrollTop; pre.scrollLeft = saved.scrollLeft; }
       }
@@ -1038,10 +1107,58 @@ function projectedMessages(current, imageOverrides = new Map(), reasoningMessage
   return apiMessages(current.messages, current.systemPrompt, current.attachments, projectionOptions(current, imageOverrides, reasoningMessageIds));
 }
 
+function streamingContextParts(message) {
+  if (message?.role !== "assistant" || message.state !== "streaming") return null;
+  return [
+    message.content || "",
+    message.toolCalls?.length && featureEnabled("streamRecovery") ? message.reasoning || "" : "",
+    ...(message.toolCalls ?? []).flatMap((call) => [
+      call.id || "",
+      call.function?.name || "",
+      call.function?.arguments || "",
+    ]),
+  ];
+}
+
+function contextStatsFor(current) {
+  const version = state.contextVersions.get(current.id) ?? 0;
+  const last = current.messages.at(-1) ?? null;
+  const stableKey = `${version}:${current.messages.length}:${last?.id ?? ""}:${last?.state ?? ""}`;
+  const liveParts = streamingContextParts(last);
+  const liveLengths = liveParts?.map((part) => part.length) ?? [];
+  const cached = state.contextStats.get(current.id);
+  if (cached?.stableKey === stableKey) {
+    if (!liveParts || liveLengths.every((length, index) => length === cached.liveLengths[index])) return cached.stats;
+    if (liveLengths.some((length, index) => length < (cached.liveLengths[index] ?? 0))) {
+      state.contextStats.delete(current.id);
+      return contextStatsFor(current);
+    }
+    const addedTokens = liveParts.reduce((total, part, index) => (
+      total + estimateTokens(part.slice(cached.liveLengths[index] ?? 0))
+    ), 0);
+    const estimatedTokens = Math.max(0, cached.stats.estimatedTokens + addedTokens);
+    const activeCompaction = activeCompactionsFor(current).length > 0;
+    const tokens = activeCompaction
+      ? estimatedTokens
+      : Math.max(estimatedTokens, cached.stats.recordedTokens ?? 0);
+    cached.liveLengths = liveLengths;
+    cached.stats = {
+      ...cached.stats,
+      tokens,
+      estimatedTokens,
+      percent: Math.min(999, (tokens / cached.stats.contextWindow) * 100),
+    };
+    return cached.stats;
+  }
+  const stats = sessionContextStats(current, projectedMessages(current));
+  state.contextStats.set(current.id, { stableKey, liveLengths, stats });
+  return stats;
+}
+
 function renderContextMeter() {
   if (!featureEnabled("contextMeter") && !featureEnabled("compaction")) return;
   const current = session();
-  const stats = sessionContextStats(current, projectedMessages(current));
+  const stats = contextStatsFor(current);
   const shown = Math.min(100, Math.round(stats.percent));
   elements.contextRing.style.setProperty("--context", `${shown}%`);
   elements.contextPercent.textContent = `${shown}%`;
@@ -1050,7 +1167,7 @@ function renderContextMeter() {
 
 function maybeOfferCompaction(current) {
   if (!featureEnabled("compaction")) return;
-  const stats = sessionContextStats(current, projectedMessages(current));
+  const stats = contextStatsFor(current);
   if (stats.percent < 80 || current.contextOfferAt === current.messages.length) return;
   current.contextOfferAt = current.messages.length;
   if (current.id === session().id) toast(`Context is about ${Math.round(stats.percent)}% full. Open the context ring to choose Soft or Normal compaction.`, 7_000);
@@ -1223,6 +1340,33 @@ function renderAll() {
   renderMessages();
   elements.undo.disabled = !featureEnabled("undoDelete") || !(session().undo?.length);
   updateGenerationControls();
+}
+
+const MESSAGE_RENDER_FEATURES = new Set([
+  "streamRecovery",
+  "richMarkdown",
+  "compaction",
+  "imageReads",
+  "readTools",
+  "turnControls",
+]);
+
+function refreshFeatureChanges(changed) {
+  applyFeatureVisibility();
+  if (changed.some((key) => key === "compaction" || key === "streamRecovery")) {
+    for (const current of state.workspace.sessions) invalidateContextStats(current);
+  }
+  if (changed.some((key) => key === "contextMeter" || key === "parallelSessions")) renderSessions();
+  if (changed.some((key) => MESSAGE_RENDER_FEATURES.has(key))) renderMessages();
+  else if (changed.some((key) => key === "contextMeter" || key === "compaction")) renderContextMeter();
+  updateToolCount();
+  updateGenerationControls();
+  if (elements.contextDialog.open && changed.some((key) => ["contextMeter", "compaction", "transcriptNavigator", "richMarkdown"].includes(key))) {
+    renderContextDialog();
+  }
+  if (elements.workspaceDialog.open && changed.some((key) => ["readTools", "writeTools", "todoTool", "richMarkdown"].includes(key))) {
+    renderWorkspaceDialog();
+  }
 }
 
 function pruneAttachments(current) {
@@ -1512,6 +1656,7 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
   let lastSaveAt = performance.now();
   let imageOverrides = new Map();
   let continuationTarget = options.continuationTarget ?? null;
+  let automaticContextRecoveryUsed = false;
   while (!controller.signal.aborted) {
     const tools = openAiTools(state.workspace.integrations, state.mcpConnections, { resources: current.resources });
     const continuing = continuationTarget;
@@ -1562,7 +1707,7 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
                 currentAssistant.reasoning += delta.reasoning;
                 if (delta.toolCalls) currentAssistant.toolCalls = structuredClone(delta.toolCalls);
                 if (current.id === session().id) scheduleRender(current, currentAssistant);
-                if (performance.now() - lastSaveAt > 2_000) {
+                if (performance.now() - lastSaveAt > STREAM_CHECKPOINT_MS) {
                   lastSaveAt = performance.now();
                   queueSave();
                 }
@@ -1627,6 +1772,24 @@ async function runAssistantLoop(current, endpoint, model, controller, options = 
       } else {
         currentAssistant.state = featureEnabled("streamRecovery") && (currentAssistant.content || currentAssistant.reasoning) ? "interrupted" : "error";
         currentAssistant.error = await connectionMessage(error, endpoint);
+        const automaticCompactions = !automaticContextRecoveryUsed && isContextLimitError(error)
+          ? applyAutomaticSoftCompaction(current)
+          : [];
+        if (automaticCompactions.length) {
+          automaticContextRecoveryUsed = true;
+          currentAssistant.meta = {
+            ...currentAssistant.meta,
+            automaticContextRecovery: automaticCompactions.map((compaction) => compaction.id),
+          };
+          currentAssistant.error = `${currentAssistant.error} Applied ${automaticCompactions.length} enabled Soft context action${automaticCompactions.length === 1 ? "" : "s"}; continuing automatically.`;
+          continuationTarget = currentAssistant;
+          currentAssistant.updatedAt = new Date().toISOString();
+          queueSave();
+          if (current.id === session().id) {
+            setConnection("connecting", "Compacted · continuing…", "The first context-limit error triggered the enabled Soft action(s) and Continue.");
+          }
+          continue;
+        }
         if (current.id === session().id) {
           state.connected = false;
           setConnection("error", currentAssistant.state === "interrupted" ? "Stream interrupted" : "Request failed", currentAssistant.error);
@@ -2121,10 +2284,14 @@ function contextCompactionCard(compaction) {
 
 function renderContextDialog() {
   const current = session();
-  const stats = sessionContextStats(current, projectedMessages(current));
+  const stats = contextStatsFor(current);
   elements.contextDetail.textContent = `${stats.tokens.toLocaleString()} estimated tokens · ${stats.percent.toFixed(1)}% of ${stats.contextWindow.toLocaleString()}. Originals remain in browser state regardless of projection.`;
   const active = activeCompactionsFor(current);
   const compacted = compactedMessageIds(current);
+  const compactionByMessage = new Map();
+  for (const compaction of active) for (const id of compaction.messageIds) compactionByMessage.set(id, compaction);
+  elements.autoCompactSoft.checked = current.autoCompaction?.firecrawl === true;
+  elements.autoCompactContextReads.checked = current.autoCompaction?.contextReads === true;
   elements.compactContextReads.disabled = !current.messages.some((message) => (
     message.role === "tool"
     && message.name === CONTEXT_TOOL_NAME
@@ -2140,7 +2307,7 @@ function renderContextDialog() {
     node.dataset.role = message.role;
     node.dataset.state = message.state;
     node.dataset.compacted = String(compacted.has(message.id));
-    const group = active.find((item) => item.messageIds.includes(message.id));
+    const group = compactionByMessage.get(message.id);
     if (group) {
       node.dataset.compactionId = group.id;
       node.style.setProperty("--compaction-color", compactionColor(group));
@@ -2171,7 +2338,7 @@ function renderContextDialog() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.value = message.id;
-    const group = active.find((item) => item.messageIds.includes(message.id));
+    const group = compactionByMessage.get(message.id);
     checkbox.disabled = message.state === "streaming" || Boolean(group);
     checkbox.checked = Boolean(group);
     checkbox.dataset.selectionKind = message.role === "tool" ? `tool:${message.name || "result"}` : message.role;
@@ -2199,25 +2366,26 @@ function openContextDialog() {
   if (featureEnabled("transcriptNavigator")) elements.transcriptSearch.focus();
 }
 
-function activateCompaction(current, value) {
-  current.compactions.push(value);
-  current.activeCompactionId = value.id;
+function activateCompactions(current, values, options = {}) {
+  if (!values.length) return;
+  current.compactions.push(...values);
+  current.activeCompactionId = values.at(-1).id;
   touchSession(current);
-  renderAll();
-  renderContextDialog();
-  queueSave();
+  if (options.render !== false && current.id === session().id) {
+    renderAll();
+    if (elements.contextDialog.open) renderContextDialog();
+  }
+  if (options.save !== false) queueSave();
 }
 
-function compactSoft() {
-  if (!featureEnabled("compaction")) return;
-  const current = session();
+function prepareSoftFirecrawl(current, alreadyCompacted = compactedMessageIds(current)) {
   const selected = new Set();
   const resources = [];
-  const alreadyCompacted = compactedMessageIds(current);
+  const resourceMap = new Map(current.resources.map((resource) => [resource.id, resource]));
   for (const message of current.messages) {
     if (message.role !== "tool" || !["web_search", "web_scrape"].includes(message.name)) continue;
     if (alreadyCompacted.has(message.id)) continue;
-    let resource = message.meta?.resourceId ? current.resources.find((item) => item.id === message.meta.resourceId) : null;
+    let resource = message.meta?.resourceId ? resourceMap.get(message.meta.resourceId) : null;
     if (!resource) {
       resource = createContextResource(message.content, {
         kind: message.name === "web_scrape" ? "firecrawl-scrape" : "firecrawl-search",
@@ -2225,38 +2393,38 @@ function compactSoft() {
         sourceTool: message.name,
       });
       current.resources.push(resource);
-      message.meta = { ...message.meta, resourceId: resource.id };
+      resourceMap.set(resource.id, resource);
+      message.meta = { ...message.meta, resourceId: resource.id, imageResourceScanned: true };
     }
     selected.add(message.id);
     resources.push(resource);
   }
-  if (!selected.size) { toast("No Firecrawl search or scrape results are present in this chat."); return; }
+  if (!selected.size) return null;
   const expanded = new Set([...expandToolSelection(current, selected)].filter((id) => !alreadyCompacted.has(id)));
   const summary = [
     "Firecrawl results were losslessly indexed as clean Markdown. Original messages remain stored.",
     ...resources.map((resource) => `- \`${resource.id}\` · ${resource.name} · ${resource.sections.length} ordered section${resource.sections.length === 1 ? "" : "s"}`),
     "Use context_read kind=resource with a resource id and one-based section to open only the needed portion.",
   ].join("\n");
-  activateCompaction(current, {
-    id: messageId("compact"), mode: "soft", messageIds: [...expanded], summary,
-    searchTerms: compactionSearchTerms(current.messages, expanded),
-    prompt: "", active: true, createdAt: new Date().toISOString(),
-  });
-  toast(`Indexed ${resources.length} Firecrawl result${resources.length === 1 ? "" : "s"}`);
+  return {
+    count: resources.length,
+    value: {
+      id: messageId("compact"), mode: "soft", messageIds: [...expanded], summary,
+      searchTerms: compactionSearchTerms(current.messages, expanded),
+      prompt: "", active: true, createdAt: new Date().toISOString(),
+    },
+  };
 }
 
-function compactContextReads() {
-  if (!featureEnabled("compaction")) return;
-  const current = session();
+function prepareSoftContextReads(current, alreadyCompacted = compactedMessageIds(current)) {
   const reads = current.messages.filter((message) => (
     message.role === "tool"
     && message.name === CONTEXT_TOOL_NAME
     && message.state !== "streaming"
     && message.content.trim()
   ));
-  const alreadyCompacted = compactedMessageIds(current);
   const freshReads = reads.filter((message) => !alreadyCompacted.has(message.id));
-  if (!freshReads.length) { toast("No new context-read results are present in this chat."); return; }
+  if (!freshReads.length) return null;
   const selected = new Set([...expandToolSelection(current, new Set(freshReads.map((message) => message.id)))]
     .filter((id) => !alreadyCompacted.has(id)));
   const readIndex = freshReads.map((message) => {
@@ -2268,12 +2436,52 @@ function compactContextReads() {
     ...readIndex,
     "Use context_read kind=message with a listed id to reopen one exact result.",
   ].join("\n");
-  activateCompaction(current, {
-    id: messageId("compact"), mode: "soft", messageIds: [...selected], summary,
-    searchTerms: compactionSearchTerms(current.messages, selected),
-    prompt: "", active: true, createdAt: new Date().toISOString(),
-  });
-  toast(`Collapsed ${freshReads.length} context-read result${freshReads.length === 1 ? "" : "s"}`);
+  return {
+    count: freshReads.length,
+    value: {
+      id: messageId("compact"), mode: "soft", messageIds: [...selected], summary,
+      searchTerms: compactionSearchTerms(current.messages, selected),
+      prompt: "", active: true, createdAt: new Date().toISOString(),
+    },
+  };
+}
+
+function compactSoft() {
+  if (!featureEnabled("compaction")) return;
+  const current = session();
+  const prepared = prepareSoftFirecrawl(current);
+  if (!prepared) { toast("No Firecrawl search or scrape results are present in this chat."); return; }
+  activateCompactions(current, [prepared.value]);
+  toast(`Indexed ${prepared.count} Firecrawl result${prepared.count === 1 ? "" : "s"}`);
+}
+
+function compactContextReads() {
+  if (!featureEnabled("compaction")) return;
+  const current = session();
+  const prepared = prepareSoftContextReads(current);
+  if (!prepared) { toast("No new context-read results are present in this chat."); return; }
+  activateCompactions(current, [prepared.value]);
+  toast(`Collapsed ${prepared.count} context-read result${prepared.count === 1 ? "" : "s"}`);
+}
+
+function applyAutomaticSoftCompaction(current) {
+  if (!featureEnabled("compaction")) return [];
+  const settings = current.autoCompaction ?? {};
+  const excluded = compactedMessageIds(current);
+  const prepared = [];
+  if (settings.firecrawl) {
+    const firecrawl = prepareSoftFirecrawl(current, excluded);
+    if (firecrawl) {
+      prepared.push(firecrawl.value);
+      for (const id of firecrawl.value.messageIds) excluded.add(id);
+    }
+  }
+  if (settings.contextReads) {
+    const reads = prepareSoftContextReads(current, excluded);
+    if (reads) prepared.push(reads.value);
+  }
+  if (prepared.length) activateCompactions(current, prepared, { render: false, save: false });
+  return prepared;
 }
 
 function compactionSource(current, ids) {
@@ -2306,11 +2514,11 @@ async function compactNormal() {
       { role: "user", content: `Selected entries (exact browser-local snapshot):\n\n${JSON.stringify(compactionSource(current, selected), null, 2)}` },
     ], { ...current.parameters, maxTokens: null }, []));
     if (!result.content.trim()) throw new Error("The stateless summarizer returned no summary.");
-    activateCompaction(current, {
+    activateCompactions(current, [{
       id: messageId("compact"), mode: "normal", messageIds: [...selected], summary: result.content.trim(),
       searchTerms: compactionSearchTerms(current.messages, selected),
       prompt: current.compactionPrompt, active: true, createdAt: new Date().toISOString(),
-    });
+    }]);
     toast(`${selected.size} entries compacted; originals remain available`);
   } catch (error) {
     toast(error instanceof Error ? error.message : "Compaction failed", 6_000);
@@ -2363,6 +2571,16 @@ function selectOlderContext() {
 
 function clearContextSelection() {
   for (const input of elements.compactionMessages.querySelectorAll("input[type='checkbox']:not(:disabled)")) input.checked = false;
+}
+
+function updateAutoCompaction() {
+  const current = session();
+  current.autoCompaction = {
+    firecrawl: elements.autoCompactSoft.checked,
+    contextReads: elements.autoCompactContextReads.checked,
+  };
+  touchSession(current, false);
+  queueSave();
 }
 
 function renderTodos(current) {
@@ -2547,6 +2765,7 @@ async function importState(file) {
     state.mcpStatus.clear();
     if (source?.schema === WORKSPACE_SCHEMA || source?.schema === LEGACY_WORKSPACE_SCHEMA) {
       state.workspace = parseWorkspaceDocument(source);
+      resetContextStats();
       toast(`Restored ${state.workspace.sessions.length} session${state.workspace.sessions.length === 1 ? "" : "s"}`);
     } else {
       const imported = sessionFromConversation(source);
@@ -2663,9 +2882,12 @@ async function verifyFirecrawl() {
   }
 }
 
-function handleSessionFormInput() {
-  syncSessionFromForm();
+function handleSessionFormInput(event) {
+  syncSessionFromForm({
+    contextChanged: event.target === elements.systemPrompt || event.target === elements.contextWindow,
+  });
   renderSessions();
+  if (event.target === elements.systemPrompt || event.target === elements.contextWindow) renderContextMeter();
   queueSave();
 }
 
@@ -2681,14 +2903,15 @@ function setFeatureMatrix(enabled) {
     toast("Stop background chat generations before disabling Parallel chats.", 5_000);
     return;
   }
+  const previousFeatures = { ...state.workspace.integrations.features };
   for (const control of Object.values(featureControls)) control.checked = enabled;
   syncIntegrationsFromForm();
   if (enabled) for (const item of state.workspace.sessions) hydrateScrapedImageResources(item);
   const current = session();
   for (const item of state.workspace.sessions) item.parameters.maxTokens = enabled ? null : 8192;
   writeParameters(current.parameters);
-  applyFeatureVisibility();
-  renderAll();
+  const changed = FEATURE_KEYS.filter((key) => previousFeatures[key] !== featureEnabled(key));
+  refreshFeatureChanges(changed);
   queueSave();
 }
 
@@ -2698,8 +2921,9 @@ function handleFeatureInput(event) {
     elements.featureParallelSessions.checked = true;
     toast("Stop background chat generations before disabling Parallel chats.", 5_000);
   }
-  const previousAuto = featureEnabled("autoMaxTokens");
-  const previousImageReads = featureEnabled("imageReads");
+  const previousFeatures = { ...state.workspace.integrations.features };
+  const previousAuto = previousFeatures.autoMaxTokens;
+  const previousImageReads = previousFeatures.imageReads;
   if (elements.writeToolsEnabled.checked) {
     elements.readToolsEnabled.checked = true;
   }
@@ -2712,8 +2936,8 @@ function handleFeatureInput(event) {
     for (const item of state.workspace.sessions) item.parameters.maxTokens = featureEnabled("autoMaxTokens") ? null : 8192;
     writeParameters(current.parameters);
   }
-  applyFeatureVisibility();
-  renderAll();
+  const changed = FEATURE_KEYS.filter((key) => previousFeatures[key] !== featureEnabled(key));
+  refreshFeatureChanges(changed);
   queueSave();
 }
 
@@ -2814,7 +3038,9 @@ elements.mcpList.addEventListener("change", (event) => {
 });
 elements.testFirecrawl.addEventListener("click", verifyFirecrawl);
 elements.compactSoft.addEventListener("click", compactSoft);
+elements.autoCompactSoft.addEventListener("input", updateAutoCompaction);
 elements.compactContextReads.addEventListener("click", compactContextReads);
+elements.autoCompactContextReads.addEventListener("input", updateAutoCompaction);
 elements.compactNormal.addEventListener("click", compactNormal);
 elements.restoreContext.addEventListener("click", restoreContext);
 elements.selectOlderContext.addEventListener("click", selectOlderContext);
@@ -2868,16 +3094,26 @@ installCheckboxPainter(
 );
 installCheckboxPainter(elements.compactionMessages, ".compaction-entry", "selectionKind", () => {});
 
-window.addEventListener("pagehide", () => persist.flush());
+window.addEventListener("pagehide", () => {
+  if (state.storageReady) {
+    state.workspace.savedAt = new Date().toISOString();
+    persist(state.workspace);
+  }
+  void persist.flush();
+});
 
 async function bootstrap() {
   try {
     const stored = await loadWorkspace();
-    if (stored) state.workspace = parseWorkspaceDocument(stored);
+    if (stored) {
+      state.workspace = parseWorkspaceDocument(stored);
+      resetContextStats();
+    }
     state.storageReady = true;
     elements.storageStatus.textContent = stored ? "Restored from this browser." : "Saved automatically in this browser.";
   } catch (error) {
     state.workspace = createWorkspace();
+    resetContextStats();
     elements.storageStatus.textContent = `Browser persistence unavailable: ${error instanceof Error ? error.message : String(error)}`;
   }
   writeIntegrations();

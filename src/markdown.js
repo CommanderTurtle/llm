@@ -133,6 +133,12 @@ async function highlightCode(codeElement, code, language, diagnostics) {
     const hljs = await loadClassicScript(HIGHLIGHT_URL, "hljs");
     const normalized = String(language || "").toLowerCase();
     const languageName = normalized && hljs.getLanguage(normalized) ? normalized : "";
+    if (!diagnostics.length) {
+      codeElement.innerHTML = languageName
+        ? hljs.highlight(code, { language: languageName, ignoreIllegals: true }).value
+        : hljs.highlightAuto(code).value;
+      return;
+    }
     const errorLines = new Map(diagnostics.map((item) => [item.line, item]));
     const fragment = document.createDocumentFragment();
     for (const [index, line] of code.split("\n").entries()) {
