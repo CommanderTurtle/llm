@@ -32,7 +32,7 @@ function resourceHasImages(resource) {
 function localToolEnabled(name, integrations, context = {}) {
   if (name === CONTEXT_TOOL_NAME) return integrations.localTools?.context === true;
   if (name === VIEW_IMAGE_TOOL_NAME) {
-    return integrations.localTools?.context === true && (context.resources ?? []).some(resourceHasImages);
+    return integrations.localTools?.images === true && (context.resources ?? []).some(resourceHasImages);
   }
   if (name === RESOURCE_SEARCH_TOOL_NAME) {
     return integrations.localTools?.context === true
@@ -59,7 +59,7 @@ export function parseToolArguments(value) {
 export function openAiTools(integrations, mcpConnections = new Map(), options = {}) {
   const tools = [];
   const resources = Array.isArray(options.resources) ? options.resources : [];
-  const imageResources = integrations.localTools?.context === true ? resources.filter(resourceHasImages) : [];
+  const imageResources = integrations.localTools?.images === true ? resources.filter(resourceHasImages) : [];
   const searchableResources = integrations.localTools?.context === true
     ? resources.filter((resource) => Array.isArray(resource.readSections) && resource.readSections.length)
     : [];
@@ -110,15 +110,15 @@ export function openAiTools(integrations, mcpConnections = new Map(), options = 
       type: "function",
       function: {
         name: VIEW_IMAGE_TOOL_NAME,
-        description: "Render one exact image URL discovered in a browser-stored Firecrawl result into the visible chat. The URL must belong to the specified resource section; the user sees its source and subsection before approval.",
+        description: "View one exact image discovered in an earlier Firecrawl result. Use this whenever an indexed scrape exposes a relevant image instead of claiming images are unavailable. The browser visibly renders it in chat after approval and shows its source subsection. Pass the exact listed URL; section is optional because the browser can locate it.",
         parameters: {
           type: "object",
           properties: {
             resource_id: { type: "string", enum: imageResources.map((resource) => resource.id) },
-            section: { type: "integer", minimum: 1, description: "One-based section containing the image." },
+            section: { type: "integer", minimum: 1, description: "Optional one-based section containing the image; omit it to locate the exact URL across the resource." },
             url: { type: "string", description: "Exact scraped image URL listed for that section." },
           },
-          required: ["resource_id", "section", "url"],
+          required: ["resource_id", "url"],
           additionalProperties: false,
         },
       },
@@ -191,6 +191,7 @@ export function openAiTools(integrations, mcpConnections = new Map(), options = 
         language: { type: "string" },
         expected_revision: { type: "integer", minimum: 1 },
         content: { type: "string", description: "Complete replacement content. Use edits for a smaller hashline patch." },
+        from_response: { type: "boolean", const: true, description: "Use the exact assistant text before its final standalone DONE line as complete replacement content." },
         edits: {
           type: "array",
           items: {
@@ -206,26 +207,26 @@ export function openAiTools(integrations, mcpConnections = new Map(), options = 
         },
       },
       required: ["name"],
-      anyOf: [{ required: ["content"] }, { required: ["edits"] }],
+      anyOf: [{ required: ["from_response"] }, { required: ["content"] }, { required: ["edits"] }],
       additionalProperties: false,
     };
     tools.push({
       type: "function",
       function: {
         name: PUT_DOCUMENT_TOOL_NAME,
-        description: "Create or hashline-edit a browser-local editor document. Editing an existing revision fails unless read_document returned that same revision first. Each successful put creates an immutable diffable revision.",
+        description: "Create, replace, or hashline-edit a browser-local document. Preferred full-document workflow: write the Markdown/code normally in this assistant response, put DONE alone on the final line, then call put_document with name, optional language/expected_revision, and from_response=true. Do not JSON-escape or duplicate the document in tool arguments; the browser stores the exact response text before DONE. For a small edit, first read the current revision and pass only edits with stable line hashes. Existing documents always require a current read_document receipt. Every successful PUT creates an immutable diffable revision.",
         parameters: putParameters,
       },
     }, {
       type: "function",
       function: {
         name: PUT_INSTRUCTIONS_TOOL_NAME,
-        description: "Create or hashline-edit instructions.md. Existing instructions must be opened with instructions_read at the current revision first.",
+        description: "Create, replace, or hashline-edit instructions.md. For a full document, write it normally in this response, end with DONE on its own line, and call instructions_put with from_response=true; never squeeze the whole document into JSON. For a small edit, use hashline edits after instructions_read. Existing instructions require a current read receipt.",
         parameters: {
           ...putParameters,
           properties: Object.fromEntries(Object.entries(putParameters.properties).filter(([key]) => key !== "name")),
           required: [],
-          anyOf: [{ required: ["content"] }, { required: ["edits"] }],
+          anyOf: [{ required: ["from_response"] }, { required: ["content"] }, { required: ["edits"] }],
         },
       },
     });
@@ -290,7 +291,7 @@ export async function executeTool(call, context) {
   if (LOCAL_TOOL_NAMES.has(name)) {
     if (!localToolEnabled(name, context.integrations, context)) throw new Error(`The browser-local ${name} tool is disabled.`);
     if (!context.executeLocalTool) throw new Error(`The browser-local ${name} handler is unavailable.`);
-    return context.executeLocalTool(name, args);
+    return context.executeLocalTool(name, args, call);
   }
   for (const connection of context.mcpConnections.values()) {
     const tool = connection.tools.find((candidate) => mcpFunctionName(connection.server.id, candidate.name) === name);

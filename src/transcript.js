@@ -279,13 +279,20 @@ export function apiMessages(messages, systemPrompt = "", attachments = [], optio
   return result;
 }
 
-function attachmentList(message, attachmentMap) {
+function htmlAttribute(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function baselineAttachmentList(message, attachmentMap) {
   const names = (message.attachments ?? []).map((id) => attachmentMap.get(id)?.name).filter(Boolean);
   return names.length ? `\n\nAttachments: ${names.map((name) => `\`${name}\``).join(", ")}` : "";
 }
 
-export function conversationMarkdown(session) {
-  const attachmentMap = new Map((session.attachments ?? []).map((item) => [item.id, item]));
+function baselineConversationMarkdown(session, attachmentMap) {
   const lines = [`# ${session.title || "Conversation"}`, ""];
   if (session.model) lines.push(`Model: \`${session.model}\``, "");
   for (const message of session.messages ?? []) {
@@ -295,7 +302,90 @@ export function conversationMarkdown(session) {
     }
     lines.push(`## ${message.role[0].toUpperCase()}${message.role.slice(1)}`, "");
     if (message.reasoning) lines.push("<details><summary>Reasoning</summary>", "", message.reasoning, "", "</details>", "");
-    lines.push(message.content || "", attachmentList(message, attachmentMap), "");
+    lines.push(message.content || "", baselineAttachmentList(message, attachmentMap), "");
+  }
+  return `${lines.join("\n").replace(/\n{4,}/g, "\n\n\n").trim()}\n`;
+}
+
+function markdownAttachmentDetails(message, attachmentMap) {
+  const attachments = (message.attachments ?? []).map((id) => attachmentMap.get(id)).filter(Boolean);
+  if (!attachments.length) return [];
+  const lines = ["<details><summary>Attachments · exact chat references</summary>", ""];
+  for (const attachment of attachments) {
+    const size = Number.isFinite(Number(attachment.size)) ? Number(attachment.size) : 0;
+    const name = String(attachment.name || "attachment");
+    const type = String(attachment.type || "application/octet-stream");
+    lines.push(`### ${name}`, "", `Type: \`${type}\` · ${size.toLocaleString()} bytes`, "");
+    if (attachment.kind === "image" && attachment.dataUrl) {
+      lines.push(`<img src="${htmlAttribute(attachment.dataUrl)}" alt="${htmlAttribute(name)}">`, "");
+    } else if (attachment.text) {
+      lines.push("```text", attachment.text, "```", "");
+    }
+    if (attachment.dataUrl) {
+      lines.push(`<a href="${htmlAttribute(attachment.dataUrl)}" download="${htmlAttribute(name)}">Download exact attachment bytes</a>`, "");
+    }
+  }
+  lines.push("</details>", "");
+  return lines;
+}
+
+function toolRequestDetails(message) {
+  const lines = [];
+  for (const call of message.toolCalls ?? []) {
+    let args = call.function.arguments;
+    try { args = JSON.stringify(JSON.parse(args || "{}"), null, 2); } catch { /* Preserve malformed arguments verbatim. */ }
+    lines.push(
+      `<details><summary>Tool request · ${call.function.name || "pending"} · ${call.id}</summary>`,
+      "",
+      "```json",
+      typeof args === "string" ? args : JSON.stringify(args, null, 2),
+      "```",
+      "",
+      "</details>",
+      "",
+    );
+  }
+  return lines;
+}
+
+export function conversationMarkdown(session, options = {}) {
+  const attachmentMap = new Map((session.attachments ?? []).map((item) => [item.id, item]));
+  if (options.complete === false) return baselineConversationMarkdown(session, attachmentMap);
+  const lines = [`# ${session.title || "Conversation"}`, ""];
+  if (session.model) lines.push(`Model: \`${session.model}\``, "");
+  if (session.compactions?.length) {
+    lines.push("## Context records", "");
+    for (const compaction of session.compactions) {
+      lines.push(
+        `<details><summary>${compaction.active ? "Active" : "Inactive"} ${compaction.mode === "soft" ? "Soft index" : "Normal summary"} · ${compaction.messageIds.length} originals · ${compaction.id}</summary>`,
+        "",
+        compaction.summary || "(empty summary)",
+        "",
+        `Original message ids: ${compaction.messageIds.map((id) => `\`${id}\``).join(", ")}`,
+      );
+      if (compaction.searchTerms?.length) lines.push("", `Searchable values: ${compaction.searchTerms.map((term) => `\`${term}\``).join(", ")}`);
+      lines.push("", "</details>", "");
+    }
+  }
+  for (const [index, message] of (session.messages ?? []).entries()) {
+    if (message.role === "tool") {
+      lines.push(
+        `<details><summary>Tool result · ${message.name || "result"} · ${message.toolCallId || message.id}</summary>`,
+        "",
+        message.content || "(empty result)",
+        "",
+        ...(message.error ? [`**Error:** ${message.error}`, ""] : []),
+        "</details>",
+        "",
+      );
+      continue;
+    }
+    const state = message.state && message.state !== "complete" ? ` · ${message.state}` : "";
+    lines.push(`## ${message.role[0].toUpperCase()}${message.role.slice(1)} · #${index + 1}${state}`, "");
+    if (message.reasoning) lines.push(`<details><summary>Reasoning · ${message.reasoning.length.toLocaleString()} characters</summary>`, "", message.reasoning, "", "</details>", "");
+    lines.push(...toolRequestDetails(message));
+    lines.push(message.content || "", ...markdownAttachmentDetails(message, attachmentMap));
+    if (message.error) lines.push(`> **Turn error:** ${message.error}`, "");
   }
   return `${lines.join("\n").replace(/\n{4,}/g, "\n\n\n").trim()}\n`;
 }

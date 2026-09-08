@@ -24,8 +24,7 @@ export function sessionContextStats(session, projectedMessages = null) {
   const latestUsage = [...(session.messages ?? [])].reverse()
     .find((message) => Number.isFinite(Number(message.meta?.usage?.total_tokens)))?.meta?.usage;
   const recordedTokens = Number(latestUsage?.total_tokens);
-  const activeCompaction = (session.compactions ?? [])
-    .some((item) => item.id === session.activeCompactionId && item.active);
+  const activeCompaction = (session.compactions ?? []).some((item) => item.active);
   const tokens = activeCompaction
     ? estimatedTokens
     : Math.max(estimatedTokens, Number.isFinite(recordedTokens) ? recordedTokens : 0);
@@ -324,19 +323,48 @@ export function compactionEnvelope(compaction, messages) {
     const preview = (message.content || message.reasoning || "(empty)").replace(/\s+/g, " ").slice(0, 120);
     return `${index + 1}. \`${message.id}\` · ${label} · ${preview}${preview.length >= 120 ? "…" : ""}`;
   });
+  const searchTerms = Array.isArray(compaction.searchTerms) && compaction.searchTerms.length
+    ? compaction.searchTerms
+    : compactionSearchTerms(messages, compaction.messageIds);
   return [
     `<compacted_context id=${JSON.stringify(compaction.id)} mode=${JSON.stringify(compaction.mode)}>`,
     compaction.summary || "Selected context was collapsed without a generated summary.",
     "",
     "Collapsed originals remain available in exact form. Call context_read with kind=message or kind=reasoning and the listed id:",
     ...list,
+    ...(searchTerms.length ? ["", `Searchable values: ${searchTerms.map((term) => `\`${term}\``).join(", ")}`] : []),
     "</compacted_context>",
   ].join("\n");
 }
 
+export function compactionEnvelopes(compactions, messages) {
+  return (compactions ?? []).filter((item) => item?.active)
+    .map((item) => compactionEnvelope(item, messages))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function compactionSearchTerms(messages, messageIds, limit = 96) {
+  const selected = new Set(messageIds ?? []);
+  const counts = new Map();
+  for (const message of messages ?? []) {
+    if (!selected.has(message.id)) continue;
+    const source = [message.name, message.content, message.reasoning]
+      .filter((value) => typeof value === "string" && value)
+      .join("\n");
+    for (const token of source.match(/[\p{L}\p{N}_./:@#-]{3,}/gu) ?? []) {
+      const normalized = token.toLocaleLowerCase();
+      counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+    }
+  }
+  return [...counts]
+    .sort((left, right) => right[1] - left[1] || right[0].length - left[0].length || left[0].localeCompare(right[0]))
+    .slice(0, Math.max(1, Math.trunc(Number(limit) || 96)))
+    .map(([term]) => term);
+}
+
 export function timelineMarkdown(session) {
-  const active = (session.compactions ?? []).find((item) => item.id === session.activeCompactionId && item.active);
-  const selected = new Set(active?.messageIds ?? []);
+  const selected = new Set((session.compactions ?? []).filter((item) => item.active).flatMap((item) => item.messageIds ?? []));
   const lines = ["# Conversation timeline", ""];
   for (const [index, message] of (session.messages ?? []).entries()) {
     const label = message.role === "tool" ? `${message.role}:${message.name || "result"}` : message.role;

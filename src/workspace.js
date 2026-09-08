@@ -19,10 +19,13 @@ export const FEATURE_KEYS = Object.freeze([
   "stableScroll",
   "contextMeter",
   "compaction",
+  "imageReads",
   "readTools",
   "writeTools",
   "todoTool",
   "undoDelete",
+  "turnControls",
+  "transcriptNavigator",
 ]);
 
 export function defaultFeatures() {
@@ -82,7 +85,7 @@ export function defaultIntegrations() {
     maxToolRounds: 8,
     ocr: { enabled: true },
     features: defaultFeatures(),
-    localTools: { context: false, read: false, write: false, todos: false },
+    localTools: { context: false, images: false, read: false, write: false, todos: false },
     firecrawl: { enabled: false, url: DEFAULT_FIRECRAWL, limit: 5 },
     mcpServers: [],
   };
@@ -100,6 +103,7 @@ export function normalizeIntegrations(value = {}) {
     features,
     localTools: {
       context: features.readTools || features.compaction,
+      images: features.imageReads,
       read: features.readTools,
       write: features.readTools && features.writeTools,
       todos: features.todoTool,
@@ -179,6 +183,9 @@ function normalizedCompaction(value) {
     mode: value.mode === "soft" ? "soft" : "normal",
     messageIds: [...new Set(value.messageIds.filter((id) => typeof id === "string" && id))],
     summary: typeof value.summary === "string" ? value.summary : "",
+    searchTerms: Array.isArray(value.searchTerms)
+      ? [...new Set(value.searchTerms.filter((term) => typeof term === "string" && term).map((term) => term.slice(0, 160)))].slice(0, 128)
+      : [],
     prompt: typeof value.prompt === "string" ? value.prompt : "",
     active: value.active !== false,
     createdAt: iso(value.createdAt),
@@ -233,7 +240,9 @@ export function createSession(additions = {}, options = {}) {
     documents,
     resources,
     compactions,
-    activeCompactionId: compactions.some((item) => item.id === requestedCompaction && item.active) ? requestedCompaction : "",
+    activeCompactionId: compactions.some((item) => item.id === requestedCompaction && item.active)
+      ? requestedCompaction
+      : compactions.filter((item) => item.active).at(-1)?.id ?? "",
     compactionPrompt: typeof additions.compactionPrompt === "string" ? additions.compactionPrompt : "",
     contextOfferAt: Math.max(0, Math.trunc(Number(additions.contextOfferAt) || 0)),
     undo: Array.isArray(additions.undo) ? additions.undo.map(normalizedUndo).filter(Boolean).slice(-20) : [],

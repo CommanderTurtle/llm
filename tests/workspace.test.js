@@ -67,7 +67,7 @@ test("the feature matrix is wholly opt-in and derives no baseline tools", () => 
   assert.deepEqual(workspace.integrations.features, defaultFeatures());
   assert.deepEqual(Object.keys(workspace.integrations.features), [...FEATURE_KEYS]);
   assert.ok(Object.values(workspace.integrations.features).every((value) => value === false));
-  assert.deepEqual(workspace.integrations.localTools, { context: false, read: false, write: false, todos: false });
+  assert.deepEqual(workspace.integrations.localTools, { context: false, images: false, read: false, write: false, todos: false });
   assert.equal(workspace.sessions[0].parameters.maxTokens, 8192);
 });
 
@@ -91,7 +91,27 @@ test("enabled feature state persists and write tools imply the required reads", 
   assert.equal(restored.integrations.features.readTools, true);
   assert.equal(restored.integrations.features.richMarkdown, true);
   assert.equal(restored.integrations.features.parallelSessions, true);
-  assert.deepEqual(restored.integrations.localTools, { context: true, read: true, write: true, todos: false });
+  assert.deepEqual(restored.integrations.localTools, { context: true, images: false, read: true, write: true, todos: false });
+});
+
+test("multiple active compaction groups and image reads survive workspace round trips", () => {
+  const messages = [createMessage("user", "one", { id: "one" }), createMessage("assistant", "two", { id: "two" })];
+  const restored = parseWorkspaceDocument(workspaceDocument(createWorkspace({
+    integrations: { features: { compaction: true, imageReads: true } },
+    sessions: [{
+      messages,
+      compactions: [
+        { id: "c1", mode: "soft", messageIds: ["one"], summary: "one index", searchTerms: ["one"], active: true },
+        { id: "c2", mode: "normal", messageIds: ["two"], summary: "two summary", searchTerms: ["two"], active: true },
+      ],
+    }],
+  })));
+  assert.equal(restored.integrations.localTools.images, true);
+  assert.deepEqual(restored.sessions[0].compactions.map((item) => [item.id, item.active, item.searchTerms]), [
+    ["c1", true, ["one"]],
+    ["c2", true, ["two"]],
+  ]);
+  assert.equal(restored.sessions[0].activeCompactionId, "c2");
 });
 
 test("Auto output allowance is globally consistent with its feature checkbox", () => {

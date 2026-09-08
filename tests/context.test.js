@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   cleanToolMarkdown,
   compactionEnvelope,
+  compactionEnvelopes,
+  compactionSearchTerms,
   createContextResource,
   markResourceSectionRead,
   resourceIndex,
@@ -43,6 +45,22 @@ test("compaction projections retain summary, ids, and an exact timeline", () => 
   const timeline = timelineMarkdown({ messages, activeCompactionId: "c", compactions: [compact] });
   assert.match(timeline, /`u` · user · compacted/);
   assert.match(timeline, /`a` · assistant · compacted/);
+});
+
+test("multiple active compactions compose and retain searchable values", () => {
+  const messages = [
+    createMessage("user", "Alpha contract needs the orchard checksum", { id: "u" }),
+    createMessage("assistant", "Beta result preserves the orchard checksum", { id: "a" }),
+  ];
+  const compactions = [
+    { id: "c1", mode: "soft", active: true, summary: "Alpha index", messageIds: ["u"], searchTerms: ["orchard"] },
+    { id: "c2", mode: "normal", active: true, summary: "Beta summary", messageIds: ["a"], searchTerms: ["checksum"] },
+  ];
+  const combined = compactionEnvelopes(compactions, messages);
+  assert.match(combined, /id="c1"/);
+  assert.match(combined, /id="c2"/);
+  assert.match(combined, /Searchable values: `orchard`/);
+  assert.deepEqual(compactionSearchTerms(messages, ["u", "a"], 2), ["checksum", "orchard"]);
 });
 
 test("context estimates report a bounded percentage", () => {
