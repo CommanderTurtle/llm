@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { isImageSizeError, nextImageDimensions } from "../src/image-retry.js";
 import { executeTool, openAiTools } from "../src/tools.js";
+import { createContextResource, markResourceSectionRead } from "../src/context.js";
 import { createWorkspace } from "../src/workspace.js";
 
 test("baseline tool list is unchanged while feature tools are disabled", () => {
@@ -45,4 +46,38 @@ test("a forged call cannot execute an opt-in browser tool while it is disabled",
     attachments: [], integrations, mcpConnections: new Map(),
     executeLocalTool: () => "should not run",
   }), /put_document tool is disabled/);
+});
+
+test("scraped image and resource search tools appear only for eligible browser-local resources", () => {
+  const integrations = createWorkspace({ integrations: { features: { readTools: true } } }).integrations;
+  const resource = createContextResource("# Result\n\n![Diagram](https://images.example/diagram.webp)", {
+    id: "resource-1",
+    sourceUrl: "https://source.example/report",
+  });
+  assert.deepEqual(openAiTools(integrations, new Map(), { resources: [resource] }).map((tool) => tool.function.name), [
+    "ocr_attachment",
+    "view_image",
+    "context_read",
+    "read_document",
+    "instructions_read",
+  ]);
+  markResourceSectionRead(resource, 0);
+  assert.deepEqual(openAiTools(integrations, new Map(), { resources: [resource] }).map((tool) => tool.function.name), [
+    "ocr_attachment",
+    "view_image",
+    "context_read",
+    "resource_search",
+    "read_document",
+    "instructions_read",
+  ]);
+});
+
+test("view_image cannot be forged without an eligible indexed resource", async () => {
+  const integrations = createWorkspace({ integrations: { features: { readTools: true } } }).integrations;
+  const resource = createContextResource("![Allowed](https://images.example/allowed.png)", { id: "resource-1" });
+  await assert.rejects(() => executeTool({
+    function: { name: "view_image", arguments: JSON.stringify({ resource_id: resource.id, section: 1, url: "https://images.example/elsewhere.png" }) },
+  }, {
+    attachments: [], integrations, resources: [], mcpConnections: new Map(), executeLocalTool: () => "should not run",
+  }), /view_image tool is disabled/);
 });

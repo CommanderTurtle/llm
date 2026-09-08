@@ -3,6 +3,9 @@ import { messageId } from "./transcript.js";
 export const DEFAULT_CONTEXT_WINDOW = 131_072;
 export const RESOURCE_SECTION_CHARS = 12_000;
 
+const resourceSearchIndexes = new WeakMap();
+const IMAGE_EXTENSION = /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)(?:[?#].*)?$/i;
+
 function text(value) {
   return typeof value === "string" ? value : JSON.stringify(value ?? "");
 }
@@ -75,16 +78,210 @@ export function segmentMarkdown(value, maxChars = RESOURCE_SECTION_CHARS) {
   return sections;
 }
 
+function httpUrl(value, base = "") {
+  const candidate = String(value || "").trim().replace(/^<|>$/g, "").replace(/&amp;/g, "&");
+  if (!candidate || /^data:/i.test(candidate)) return "";
+  try {
+    const parsed = base ? new URL(candidate, base) : new URL(candidate);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function sectionHeading(section) {
+  return section.match(/^#{1,6}\s+(.+)$/m)?.[1]?.trim().replace(/\s+#+$/, "") || "";
+}
+
+function looksLikeHtmlGibberish(section) {
+  if (section.length < 240) return false;
+  const markupCount = section.match(/[\\/><^]/g)?.length ?? 0;
+  if (markupCount < 64) return false;
+  const ratio = markupCount / section.length;
+  const noisyRuns = section.match(/(?:[\\/><^][\s]*){6,}/g)?.length ?? 0;
+  const tagCount = section.match(/<\/?[A-Za-z][^>]*>/g)?.length ?? 0;
+  return ratio >= 0.16 || noisyRuns >= 3 || (tagCount >= 24 && ratio >= 0.08);
+}
+
+export function resourceSectionTags(value) {
+  const section = text(value);
+  const tags = [];
+  if (looksLikeHtmlGibberish(section)) tags.push("html_gibberish");
+  if (/(?:^|\n)[ \t]*(?:```|~~~)|<pre\b|<code\b/i.test(section)) tags.push("code");
+  if (/(?:^|\n)\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}/m.test(section) || /<table\b/i.test(section)) tags.push("table");
+  return [...new Set(tags)].slice(0, 2);
+}
+
+function addImage(images, seen, candidate, alt, sourceUrl, baseUrl) {
+  const url = httpUrl(candidate, baseUrl || sourceUrl);
+  if (!url || seen.has(url)) return;
+  seen.add(url);
+  images.push({ url, alt: String(alt || "").trim().slice(0, 240), sourceUrl: httpUrl(sourceUrl) });
+}
+
+export function resourceSectionImages(value, options = {}) {
+  const section = text(value);
+  const images = [];
+  const seen = new Set();
+  let currentSource = httpUrl(options.sourceUrl);
+  for (const line of section.split("\n")) {
+    const standalone = line.trim();
+    if (/^https?:\/\/\S+$/i.test(standalone) && !IMAGE_EXTENSION.test(standalone)) {
+      currentSource = httpUrl(standalone) || currentSource;
+    }
+
+    for (const match of line.matchAll(/!\[([^\]]*)\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+["'][^"']*["'])?\s*\)/g)) {
+      addImage(images, seen, match[2], match[1], currentSource, currentSource || options.sourceUrl);
+    }
+    for (const match of line.matchAll(/<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>/gi)) {
+      const tag = match[0];
+      const alt = tag.match(/\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+      addImage(images, seen, match[1] || match[2] || match[3], alt?.[1] || alt?.[2] || alt?.[3], currentSource, currentSource || options.sourceUrl);
+    }
+    for (const match of line.matchAll(/https?:\/\/[^\s<>"'\])]+\.(?:avif|bmp|gif|jpe?g|png|svg|webp)(?:\?[^\s<>"'\])]+)?/gi)) {
+      addImage(images, seen, match[0], "", currentSource, currentSource || options.sourceUrl);
+    }
+  }
+  return images;
+}
+
+export function analyzeResourceSections(sections, options = {}) {
+  let sourceUrl = httpUrl(options.sourceUrl);
+  return sections.map((section) => {
+    const images = resourceSectionImages(section, { sourceUrl });
+    const standaloneSources = section.split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /^https?:\/\/\S+$/i.test(line) && !IMAGE_EXTENSION.test(line))
+      .map((line) => httpUrl(line))
+      .filter(Boolean);
+    if (standaloneSources.length) sourceUrl = standaloneSources.at(-1);
+    return {
+      heading: sectionHeading(section),
+      tags: resourceSectionTags(section),
+      images,
+      sourceUrl: images.find((image) => image.sourceUrl)?.sourceUrl || sourceUrl,
+    };
+  });
+}
+
+export function resourceSectionMeta(resource, index) {
+  const stored = resource?.sectionMeta?.[index];
+  if (stored && typeof stored === "object") return stored;
+  return analyzeResourceSections([resource?.sections?.[index] || ""], { sourceUrl: resource?.sourceUrl })[0];
+}
+
+export function resourceSectionImage(resource, index, value) {
+  const requestedUrl = httpUrl(value);
+  if (!requestedUrl) return null;
+  return resourceSectionMeta(resource, index).images.find((image) => image.url === requestedUrl) ?? null;
+}
+
+export function resourceSectionAnchor(resourceId, index) {
+  const safeId = String(resourceId || "resource").replace(/[^A-Za-z0-9_-]+/g, "-");
+  return `resource-${safeId}-section-${index + 1}`;
+}
+
+export function resourceSectionText(resource, index) {
+  const meta = resourceSectionMeta(resource, index);
+  const preamble = [`# ${resource.name} · section ${index + 1}/${resource.sections.length}`];
+  if (meta.heading) preamble.push(`Subsection: ${meta.heading}`);
+  if (meta.tags.length) preamble.push(`Tags: ${meta.tags.join(", ")}`);
+  if (meta.images.length) {
+    preamble.push("Images available through view_image:");
+    for (const image of meta.images) preamble.push(`- ${image.url}${image.alt ? ` — ${image.alt}` : ""}`);
+  }
+  return `${preamble.join("\n")}\n\n${resource.sections[index]}`;
+}
+
+export function markResourceSectionRead(resource, index) {
+  const section = Math.trunc(Number(index));
+  const read = new Set(Array.isArray(resource.readSections) ? resource.readSections : []);
+  read.add(section);
+  resource.readSections = [...read].filter((item) => item >= 0 && item < resource.sections.length).sort((a, b) => a - b);
+}
+
+function searchableText(value) {
+  return String(value || "").normalize("NFKC").toLocaleLowerCase();
+}
+
+function searchWords(value) {
+  return searchableText(value).match(/[\p{L}\p{N}_-]{2,}/gu) ?? [];
+}
+
+function resourceSearchIndex(resource) {
+  const signature = `${resource.sections.length}:${resource.content.length}`;
+  const cached = resourceSearchIndexes.get(resource);
+  if (cached?.signature === signature) return cached;
+  const sections = resource.sections.map(searchableText);
+  const words = new Map();
+  sections.forEach((section, sectionIndex) => {
+    for (const word of new Set(searchWords(section))) {
+      if (!words.has(word)) words.set(word, new Set());
+      words.get(word).add(sectionIndex);
+    }
+  });
+  const indexed = { signature, sections, words };
+  resourceSearchIndexes.set(resource, indexed);
+  return indexed;
+}
+
+function searchExcerpt(section, query) {
+  const flattened = section.replace(/\s+/g, " ").trim();
+  const position = searchableText(flattened).indexOf(searchableText(query));
+  const start = Math.max(0, (position < 0 ? 0 : position) - 90);
+  const excerpt = flattened.slice(start, start + 260);
+  return `${start ? "…" : ""}${excerpt}${start + 260 < flattened.length ? "…" : ""}`;
+}
+
+export function searchResourceSections(resource, queryValue) {
+  const query = String(queryValue || "").trim();
+  if (!query) throw new Error("resource_search requires a non-empty query.");
+  const indexed = resourceSearchIndex(resource);
+  const normalizedQuery = searchableText(query);
+  const queryWords = [...new Set(searchWords(query))];
+  let candidates = null;
+  for (const word of queryWords) {
+    const matches = indexed.words.get(word) ?? new Set();
+    candidates = candidates == null ? new Set(matches) : new Set([...candidates].filter((index) => matches.has(index)));
+  }
+  const pool = candidates == null ? indexed.sections.map((_, index) => index) : [...candidates];
+  const phraseMatches = pool.filter((index) => indexed.sections[index].includes(normalizedQuery));
+  const matches = phraseMatches.length ? phraseMatches : queryWords.length ? pool : [];
+  return matches.map((index) => ({
+    section: index + 1,
+    anchor: resourceSectionAnchor(resource.id, index),
+    heading: resourceSectionMeta(resource, index).heading,
+    tags: resourceSectionMeta(resource, index).tags,
+    excerpt: searchExcerpt(resource.sections[index], query),
+  }));
+}
+
+export function resourceSearchMarkdown(resource, query) {
+  const matches = searchResourceSections(resource, query);
+  if (!matches.length) return `No sections in ${resource.name} contain ${JSON.stringify(String(query))}.`;
+  const lines = [`# Search: ${resource.name}`, "", `Query: ${JSON.stringify(String(query))}`, ""];
+  for (const match of matches) {
+    const label = `Section ${match.section}${match.heading ? ` — ${match.heading}` : ""}`;
+    const tags = match.tags.length ? ` · ${match.tags.join(", ")}` : "";
+    lines.push(`- [${label}](#${match.anchor})${tags}`, `  ${match.excerpt}`);
+  }
+  return lines.join("\n");
+}
+
 export function createContextResource(value, additions = {}) {
   const content = text(value);
   const sections = segmentMarkdown(content, additions.maxChars);
+  const sourceUrl = httpUrl(additions.sourceUrl);
   return {
     id: additions.id || messageId("resource"),
     kind: additions.kind || "document",
     name: additions.name || "Browser tool result",
     sourceTool: additions.sourceTool || "",
+    sourceUrl,
     content,
     sections,
+    sectionMeta: analyzeResourceSections(sections, { sourceUrl }),
+    readSections: [],
     createdAt: additions.createdAt || new Date().toISOString(),
   };
 }
@@ -92,9 +289,12 @@ export function createContextResource(value, additions = {}) {
 export function resourceIndex(resource, options = {}) {
   const includeFirst = options.includeFirst !== false;
   const headings = resource.sections.map((section, index) => {
-    const heading = section.match(/^#{1,6}\s+(.+)$/m)?.[1]?.trim();
-    return `${index + 1}. section ${index + 1}${heading ? ` — ${heading}` : ""} (${section.length.toLocaleString()} characters)`;
+    const meta = resourceSectionMeta(resource, index);
+    const tags = meta.tags.length ? ` · tags: ${meta.tags.join(", ")}` : "";
+    const images = meta.images.length ? ` · ${meta.images.length} image${meta.images.length === 1 ? "" : "s"}` : "";
+    return `${index + 1}. section ${index + 1}${meta.heading ? ` — ${meta.heading}` : ""} (${section.length.toLocaleString()} characters${tags}${images})`;
   });
+  const imageCount = resource.sections.reduce((total, _section, index) => total + resourceSectionMeta(resource, index).images.length, 0);
   const lines = [
     `# Indexed browser result: ${resource.name}`,
     "",
@@ -103,8 +303,14 @@ export function resourceIndex(resource, options = {}) {
     "",
     ...headings,
   ];
+  if (imageCount) lines.push("", `${imageCount} scraped image${imageCount === 1 ? " is" : "s are"} available through \`view_image\`; pass the listed resource id, section number, and exact image URL after reviewing its source.`);
   if (includeFirst && resource.sections[0]) {
-    lines.push("", "## Open section 1", "", resource.sections[0]);
+    const firstMeta = resourceSectionMeta(resource, 0);
+    lines.push("", "## Open section 1", "");
+    if (firstMeta.images.length) {
+      lines.push("Images in section 1:", ...firstMeta.images.map((image) => `- ${image.url}${image.alt ? ` — ${image.alt}` : ""}`), "");
+    }
+    lines.push(resource.sections[0]);
   }
   return lines.join("\n");
 }

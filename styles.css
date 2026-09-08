@@ -232,6 +232,15 @@ summary { cursor: pointer; font-size: 0.84rem; font-weight: 680; }
 .reasoning pre,
 .tool-call pre { overflow-x: auto; max-height: 25rem; margin: 0.6rem 0 0; white-space: pre-wrap; }
 .tool-call-name { font-family: "Cascadia Code", Consolas, monospace; font-size: 0.82rem; font-weight: 650; }
+.tool-approval-context { margin: 0.6rem 0; padding: 0.62rem 0.7rem; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-alt); font-size: 0.76rem; overflow-wrap: anywhere; }
+.tool-approval-context p { margin: 0.2rem 0; }
+.tool-approval-context blockquote { max-height: 7rem; margin: 0.5rem 0 0; overflow: auto; color: var(--muted); }
+
+.scraped-image { margin: 0 0.85rem 0.8rem; overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-alt); }
+.scraped-image-media { display: grid; min-height: 7rem; place-items: center; }
+.scraped-image img { display: block; width: auto; max-width: 100%; max-height: min(68vh, 780px); object-fit: contain; }
+.scraped-image figcaption { padding: 0.45rem 0.6rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.72rem; overflow-wrap: anywhere; }
+.scraped-image figcaption a { color: var(--accent); }
 
 .code-block { max-width: 100%; margin: 0.75rem 0; overflow: hidden; border: 1px solid #303641; border-radius: 7px; background: var(--code); color: var(--code-text); }
 .code-header { display: flex; align-items: center; min-height: 33px; padding: 0.28rem 0.42rem 0.28rem 0.65rem; border-bottom: 1px solid #303641; color: #aeb7c4; font-size: 0.72rem; }

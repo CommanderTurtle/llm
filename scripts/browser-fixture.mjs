@@ -136,7 +136,13 @@ function handleCompletion(body, response) {
     return;
   }
   const availableTools = Array.isArray(body.tools) ? body.tools : [];
-  const requestedTool = prompt.includes("scrape fixture")
+  const requestedTool = prompt.includes("view image fixture")
+    ? availableTools.find((tool) => tool?.function?.name === "view_image")
+    : prompt.includes("read resource fixture")
+      ? availableTools.find((tool) => tool?.function?.name === "context_read")
+      : prompt.includes("resource search fixture")
+        ? availableTools.find((tool) => tool?.function?.name === "resource_search")
+        : prompt.includes("scrape fixture")
     ? availableTools.find((tool) => tool?.function?.name === "web_scrape")
     : prompt.includes("search fixture")
     ? availableTools.find((tool) => tool?.function?.name === "web_search")
@@ -147,9 +153,14 @@ function handleCompletion(body, response) {
         : null;
   if (requestedTool) {
     const imageName = userText.match(/<image_attachment\b[^>]*\bname="([^"]+)"/)?.[1] ?? "ocr.svg";
+    const resourceId = availableTools.find((tool) => tool?.function?.name === "view_image")
+      ?.function?.parameters?.properties?.resource_id?.enum?.[0];
     const args = requestedTool.function.name === "web_search"
       ? { query: "fixture query", limit: 1 }
       : requestedTool.function.name === "web_scrape" ? { url: "https://example.test/long" }
+      : requestedTool.function.name === "view_image" ? { resource_id: resourceId, section: 1, url: `http://127.0.0.1:${apiPort}/fixture-image.svg` }
+      : requestedTool.function.name === "context_read" ? { kind: "resource", id: resourceId, section: 1 }
+      : requestedTool.function.name === "resource_search" ? { resource_id: requestedTool.function.parameters.properties.resource_id.enum[0], query: "fixture paragraph" }
       : requestedTool.function.name === "ocr_attachment" ? { attachment: imageName } : { value: "hello" };
     streamedCompletion(response, [
       { id: "fixture-tool", model: body.model, choices: [{ delta: { tool_calls: [{ index: 0, id: "fixture-call-1", type: "function", function: { name: requestedTool.function.name, arguments: JSON.stringify(args).slice(0, 8) } }] } }] },
@@ -182,6 +193,12 @@ const apiServer = createServer((request, response) => {
     return;
   }
 
+  if (request.method === "GET" && request.url === "/fixture-image.svg") {
+    cors(response, 200, { "Content-Type": "image/svg+xml" });
+    response.end("<svg xmlns='http://www.w3.org/2000/svg' width='320' height='180'><rect width='320' height='180' fill='#161b22'/><circle cx='160' cy='90' r='54' fill='#5cc8a1'/></svg>");
+    return;
+  }
+
   if (request.method === "POST" && request.url === "/v1/chat/completions") {
     readJson(request, response, (body) => handleCompletion(body, response));
     return;
@@ -202,7 +219,7 @@ const apiServer = createServer((request, response) => {
     readJson(request, response, (body) => {
       cors(response, 200, { "Content-Type": "application/json" });
       const long = String(body.url).includes("long") ? `\n\n${"## Ordered section\nfixture paragraph\n\n".repeat(900)}` : "";
-      response.end(JSON.stringify({ success: true, data: { markdown: `# Scraped fixture\n\n${body.url}${long}` } }));
+      response.end(JSON.stringify({ success: true, data: { markdown: `# Scraped fixture\n\n${body.url}\n\n![Fixture diagram](http://127.0.0.1:${apiPort}/fixture-image.svg)${long}` } }));
     });
     return;
   }

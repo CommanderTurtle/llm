@@ -6,6 +6,8 @@ export const OCR_TOOL_NAME = "ocr_attachment";
 export const SEARCH_TOOL_NAME = "web_search";
 export const SCRAPE_TOOL_NAME = "web_scrape";
 export const CONTEXT_TOOL_NAME = "context_read";
+export const VIEW_IMAGE_TOOL_NAME = "view_image";
+export const RESOURCE_SEARCH_TOOL_NAME = "resource_search";
 export const TODO_TOOL_NAME = "todo_update";
 export const READ_DOCUMENT_TOOL_NAME = "read_document";
 export const PUT_DOCUMENT_TOOL_NAME = "put_document";
@@ -14,6 +16,8 @@ export const PUT_INSTRUCTIONS_TOOL_NAME = "instructions_put";
 
 const LOCAL_TOOL_NAMES = new Set([
   CONTEXT_TOOL_NAME,
+  VIEW_IMAGE_TOOL_NAME,
+  RESOURCE_SEARCH_TOOL_NAME,
   TODO_TOOL_NAME,
   READ_DOCUMENT_TOOL_NAME,
   PUT_DOCUMENT_TOOL_NAME,
@@ -21,8 +25,19 @@ const LOCAL_TOOL_NAMES = new Set([
   PUT_INSTRUCTIONS_TOOL_NAME,
 ]);
 
-function localToolEnabled(name, integrations) {
+function resourceHasImages(resource) {
+  return resource?.sectionMeta?.some((section) => Array.isArray(section?.images) && section.images.length);
+}
+
+function localToolEnabled(name, integrations, context = {}) {
   if (name === CONTEXT_TOOL_NAME) return integrations.localTools?.context === true;
+  if (name === VIEW_IMAGE_TOOL_NAME) {
+    return integrations.localTools?.context === true && (context.resources ?? []).some(resourceHasImages);
+  }
+  if (name === RESOURCE_SEARCH_TOOL_NAME) {
+    return integrations.localTools?.context === true
+      && (context.resources ?? []).some((resource) => Array.isArray(resource.readSections) && resource.readSections.length);
+  }
   if (name === TODO_TOOL_NAME) return integrations.localTools?.todos === true;
   if (name === READ_DOCUMENT_TOOL_NAME || name === READ_INSTRUCTIONS_TOOL_NAME) return integrations.localTools?.read === true;
   if (name === PUT_DOCUMENT_TOOL_NAME || name === PUT_INSTRUCTIONS_TOOL_NAME) return integrations.localTools?.write === true;
@@ -41,8 +56,13 @@ export function parseToolArguments(value) {
   }
 }
 
-export function openAiTools(integrations, mcpConnections = new Map()) {
+export function openAiTools(integrations, mcpConnections = new Map(), options = {}) {
   const tools = [];
+  const resources = Array.isArray(options.resources) ? options.resources : [];
+  const imageResources = integrations.localTools?.context === true ? resources.filter(resourceHasImages) : [];
+  const searchableResources = integrations.localTools?.context === true
+    ? resources.filter((resource) => Array.isArray(resource.readSections) && resource.readSections.length)
+    : [];
   if (integrations.ocr.enabled) {
     tools.push({
       type: "function",
@@ -85,6 +105,25 @@ export function openAiTools(integrations, mcpConnections = new Map()) {
       },
     });
   }
+  if (imageResources.length) {
+    tools.push({
+      type: "function",
+      function: {
+        name: VIEW_IMAGE_TOOL_NAME,
+        description: "Render one exact image URL discovered in a browser-stored Firecrawl result into the visible chat. The URL must belong to the specified resource section; the user sees its source and subsection before approval.",
+        parameters: {
+          type: "object",
+          properties: {
+            resource_id: { type: "string", enum: imageResources.map((resource) => resource.id) },
+            section: { type: "integer", minimum: 1, description: "One-based section containing the image." },
+            url: { type: "string", description: "Exact scraped image URL listed for that section." },
+          },
+          required: ["resource_id", "section", "url"],
+          additionalProperties: false,
+        },
+      },
+    });
+  }
   if (integrations.localTools?.context === true) {
     tools.push({
       type: "function",
@@ -99,6 +138,24 @@ export function openAiTools(integrations, mcpConnections = new Map()) {
             section: { type: "integer", minimum: 1, description: "One-based resource section." },
           },
           required: ["kind"],
+          additionalProperties: false,
+        },
+      },
+    });
+  }
+  if (searchableResources.length) {
+    tools.push({
+      type: "function",
+      function: {
+        name: RESOURCE_SEARCH_TOOL_NAME,
+        description: "Search the fast browser-local word index for a long result that was already opened with context_read. Returns only matching section links and excerpts, without expanding the full resource.",
+        parameters: {
+          type: "object",
+          properties: {
+            resource_id: { type: "string", enum: searchableResources.map((resource) => resource.id) },
+            query: { type: "string" },
+          },
+          required: ["resource_id", "query"],
           additionalProperties: false,
         },
       },
@@ -228,10 +285,10 @@ export async function executeTool(call, context) {
   if (name === SCRAPE_TOOL_NAME) {
     if (context.integrations.firecrawl?.enabled !== true) throw new Error("Firecrawl is disabled.");
     const result = await scrapeFirecrawl(context.integrations.firecrawl.url, args, { signal: context.signal });
-    return context.storeResource ? context.storeResource(result, { kind: "firecrawl-scrape", name: `Scrape: ${args.url}`, sourceTool: name }) : result;
+    return context.storeResource ? context.storeResource(result, { kind: "firecrawl-scrape", name: `Scrape: ${args.url}`, sourceTool: name, sourceUrl: args.url }) : result;
   }
   if (LOCAL_TOOL_NAMES.has(name)) {
-    if (!localToolEnabled(name, context.integrations)) throw new Error(`The browser-local ${name} tool is disabled.`);
+    if (!localToolEnabled(name, context.integrations, context)) throw new Error(`The browser-local ${name} tool is disabled.`);
     if (!context.executeLocalTool) throw new Error(`The browser-local ${name} handler is unavailable.`);
     return context.executeLocalTool(name, args);
   }

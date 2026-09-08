@@ -1,5 +1,6 @@
 import { createMessage, messageId, normalizeParameters, parseConversationDocument } from "./transcript.js";
 import { createBrowserDocument } from "./documents.js";
+import { analyzeResourceSections } from "./context.js";
 
 export const LEGACY_WORKSPACE_SCHEMA = "https://llm.shel.sh/schemas/workspace-v1.json";
 export const WORKSPACE_SCHEMA = "https://llm.shel.sh/schemas/workspace-v2.json";
@@ -123,19 +124,50 @@ function normalizedTodo(value) {
   };
 }
 
-function normalizedResource(value) {
+function reusableSectionMeta(value, sections) {
+  if (!Array.isArray(value.sectionMeta) || value.sectionMeta.length !== sections.length) return null;
+  const normalized = value.sectionMeta.map((section) => {
+    if (!section || typeof section !== "object") return null;
+    const images = Array.isArray(section.images) ? section.images.map((image) => {
+      if (!image || typeof image.url !== "string" || !/^https?:\/\//i.test(image.url)) return null;
+      return {
+        url: image.url,
+        alt: typeof image.alt === "string" ? image.alt.slice(0, 240) : "",
+        sourceUrl: typeof image.sourceUrl === "string" && /^https?:\/\//i.test(image.sourceUrl) ? image.sourceUrl : "",
+      };
+    }).filter(Boolean) : [];
+    return {
+      heading: typeof section.heading === "string" ? section.heading.slice(0, 240) : "",
+      tags: Array.isArray(section.tags)
+        ? [...new Set(section.tags.filter((tag) => ["code", "table", "html_gibberish"].includes(tag)))].slice(0, 2)
+        : [],
+      images,
+      sourceUrl: typeof section.sourceUrl === "string" && /^https?:\/\//i.test(section.sourceUrl) ? section.sourceUrl : "",
+    };
+  });
+  return normalized.every(Boolean) ? normalized : null;
+}
+
+function normalizedResource(value, options = {}) {
   if (!value || typeof value !== "object" || typeof value.content !== "string") return null;
   const suppliedSections = Array.isArray(value.sections) && value.sections.every((section) => typeof section === "string")
     ? [...value.sections]
     : [];
   const sections = suppliedSections.length && suppliedSections.join("") === value.content ? suppliedSections : [value.content];
+  const sourceUrl = typeof value.sourceUrl === "string" && /^https?:\/\//i.test(value.sourceUrl) ? value.sourceUrl : "";
+  const sectionMeta = options.reuseResourceMetadata ? reusableSectionMeta(value, sections) : null;
   return {
     id: typeof value.id === "string" && value.id ? value.id : messageId("resource"),
     kind: typeof value.kind === "string" ? value.kind : "document",
     name: typeof value.name === "string" && value.name.trim() ? value.name.trim().slice(0, 240) : "Browser tool result",
     sourceTool: typeof value.sourceTool === "string" ? value.sourceTool : "",
+    sourceUrl,
     content: value.content,
     sections,
+    sectionMeta: sectionMeta ?? analyzeResourceSections(sections, { sourceUrl }),
+    readSections: Array.isArray(value.readSections)
+      ? [...new Set(value.readSections.map(Number).filter((index) => Number.isInteger(index) && index >= 0 && index < sections.length))].sort((a, b) => a - b)
+      : [],
     createdAt: iso(value.createdAt),
   };
 }
@@ -164,7 +196,7 @@ function normalizedUndo(value) {
   };
 }
 
-export function createSession(additions = {}) {
+export function createSession(additions = {}, options = {}) {
   const now = new Date().toISOString();
   const id = additions.id || messageId("session");
   const attachments = Array.isArray(additions.attachments) ? additions.attachments.map(normalizedAttachment).filter(Boolean) : [];
@@ -180,7 +212,7 @@ export function createSession(additions = {}) {
   }
   for (const message of messages) message.attachments = message.attachments.filter((attachmentId) => attachmentIds.has(attachmentId));
   const messageIds = new Set(messages.map((message) => message.id));
-  const resources = Array.isArray(additions.resources) ? additions.resources.map(normalizedResource).filter(Boolean) : [];
+  const resources = Array.isArray(additions.resources) ? additions.resources.map((resource) => normalizedResource(resource, options)).filter(Boolean) : [];
   const documents = Array.isArray(additions.documents) ? additions.documents.map(createBrowserDocument) : [];
   const todos = Array.isArray(additions.todos) ? additions.todos.map(normalizedTodo).filter(Boolean) : [];
   const compactions = Array.isArray(additions.compactions)
@@ -228,9 +260,9 @@ export function touchSession(session) {
   return session;
 }
 
-export function createWorkspace(additions = {}) {
+export function createWorkspace(additions = {}, options = {}) {
   const sourceSessions = Array.isArray(additions.sessions) ? additions.sessions : [];
-  const sessions = sourceSessions.length ? sourceSessions.map(createSession) : [createSession()];
+  const sessions = sourceSessions.length ? sourceSessions.map((session) => createSession(session, options)) : [createSession()];
   const requestedActive = typeof additions.activeSessionId === "string" ? additions.activeSessionId : "";
   const integrations = normalizeIntegrations(additions.integrations);
   for (const session of sessions) {
@@ -262,7 +294,7 @@ export function parseWorkspaceDocument(value) {
 }
 
 export function workspaceDocument(workspace) {
-  const normalized = createWorkspace(workspace);
+  const normalized = createWorkspace(workspace, { reuseResourceMetadata: true });
   normalized.savedAt = new Date().toISOString();
   return normalized;
 }

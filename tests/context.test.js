@@ -5,7 +5,12 @@ import {
   cleanToolMarkdown,
   compactionEnvelope,
   createContextResource,
+  markResourceSectionRead,
   resourceIndex,
+  resourceSearchMarkdown,
+  resourceSectionImage,
+  resourceSectionImages,
+  resourceSectionTags,
   segmentMarkdown,
   sessionContextStats,
   timelineMarkdown,
@@ -57,4 +62,42 @@ test("an active lossless compaction reports its projected context instead of sta
   const stats = sessionContextStats(session, [{ role: "user", content: "small projection" }]);
   assert.equal(stats.tokens, stats.estimatedTokens);
   assert.equal(stats.recordedTokens, 80_000);
+});
+
+test("resource sections expose at most two deterministic comma-ready tags", () => {
+  const markedUp = `${"<div>\\/^</div>".repeat(30)}\n\n\`\`\`js\nalert(1)\n\`\`\`\n\n| A | B |\n| --- | --- |`;
+  assert.deepEqual(resourceSectionTags(markedUp), ["html_gibberish", "code"]);
+  assert.deepEqual(resourceSectionTags("| A | B |\n| --- | --- |\n| 1 | 2 |"), ["table"]);
+});
+
+test("scraped image metadata retains its page source and resolves relative URLs", () => {
+  const images = resourceSectionImages("![Chart](./media/chart.webp)\n<img src='https://cdn.example/other.png' alt='Other'>", {
+    sourceUrl: "https://example.test/report/index.html",
+  });
+  assert.deepEqual(images.map((image) => image.url), [
+    "https://example.test/report/media/chart.webp",
+    "https://cdn.example/other.png",
+  ]);
+  assert.equal(images[0].sourceUrl, "https://example.test/report/index.html");
+
+  const resource = createContextResource("![Chart](./media/chart.webp)", {
+    sourceUrl: "https://example.test/report/index.html",
+  });
+  assert.equal(resourceSectionImage(resource, 0, "https://example.test/report/media/chart.webp")?.alt, "Chart");
+  assert.equal(resourceSectionImage(resource, 0, "https://example.test/report/media/elsewhere.webp"), null);
+});
+
+test("resource search uses the local index and returns section anchors only after read state can be recorded", () => {
+  const resource = createContextResource(`# Alpha\nneedle first ${"alpha ".repeat(10)}\n\n# Beta\nneedle second ${"beta ".repeat(10)}`, {
+    id: "resource-search",
+    name: "Search fixture",
+    maxChars: 80,
+  });
+  assert.deepEqual(resource.readSections, []);
+  markResourceSectionRead(resource, 0);
+  assert.deepEqual(resource.readSections, [0]);
+  const result = resourceSearchMarkdown(resource, "needle");
+  assert.match(result, /#resource-resource-search-section-1/);
+  assert.match(result, /#resource-resource-search-section-2/);
+  assert.match(resourceSearchMarkdown(resource, "@missing"), /^No sections/);
 });

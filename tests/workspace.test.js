@@ -106,9 +106,13 @@ test("Auto output allowance is globally consistent with its feature checkbox", (
 
 test("imported resource sections cannot diverge from their exact stored content", () => {
   const workspace = createWorkspace({ sessions: [{ resources: [{
-    id: "resource-1", content: "exact source", sections: ["different projection"],
+    id: "resource-1", content: "![Image](./image.webp)", sections: ["different projection"],
+    sourceUrl: "https://example.test/report/", readSections: [0, 8, -1],
   }] }] });
-  assert.deepEqual(workspace.sessions[0].resources[0].sections, ["exact source"]);
+  const resource = workspace.sessions[0].resources[0];
+  assert.deepEqual(resource.sections, ["![Image](./image.webp)"]);
+  assert.deepEqual(resource.readSections, [0]);
+  assert.equal(resource.sectionMeta[0].images[0].url, "https://example.test/report/image.webp");
 });
 
 test("undo snapshots retain attachment bytes needed by restored turns", () => {
