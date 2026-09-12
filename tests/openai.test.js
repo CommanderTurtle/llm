@@ -45,6 +45,21 @@ test("model discovery fails clearly instead of hanging on an unreachable endpoin
   );
 });
 
+test("model discovery distinguishes an opaque reachable endpoint from an offline server", async () => {
+  const calls = [];
+  const fetchImpl = async (_url, options) => {
+    calls.push(options.mode);
+    if (options.mode === "cors") throw new TypeError("Failed to fetch");
+    return { type: "opaque" };
+  };
+
+  await assert.rejects(
+    discoverModels("http://localhost:8000/v1", { fetchImpl }),
+    (error) => error?.code === "CORS_BLOCKED" && /NInfer.*--cors/.test(error.message),
+  );
+  assert.deepEqual(calls, ["cors", "no-cors"]);
+});
+
 test("chat completion combines content, reasoning, finish reason, and usage", async () => {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
