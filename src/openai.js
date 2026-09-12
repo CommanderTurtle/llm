@@ -102,6 +102,28 @@ function networkError(error, action, url) {
   );
 }
 
+async function corsProbe(url, fetchImpl, signal) {
+  try {
+    const response = await fetchImpl(url, localFetchOptions(url, {
+      method: "GET",
+      mode: "no-cors",
+      credentials: "omit",
+      cache: "no-store",
+      signal,
+    }));
+    return response?.type === "opaque";
+  } catch {
+    return false;
+  }
+}
+
+function corsError(error, url) {
+  return new OpenAIEndpointError(
+    `The browser reached ${url}, but the server did not permit this page to read it. Enable CORS on the model server; for NInfer, append --cors to ninfer-serve.`,
+    { code: "CORS_BLOCKED", cause: error },
+  );
+}
+
 function boundedSignal(source, timeoutMs) {
   const duration = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12_000;
   const controller = new AbortController();
@@ -125,16 +147,21 @@ function boundedSignal(source, timeoutMs) {
 export async function discoverModelCatalog(endpoint, options = {}) {
   const base = normalizeLocalEndpoint(endpoint);
   const url = endpointResource(base, "models");
+  const fetchImpl = options.fetchImpl ?? fetch;
   const bounded = boundedSignal(options.signal, options.timeoutMs);
   let response;
   try {
-    response = await (options.fetchImpl ?? fetch)(url, localFetchOptions(url, {
+    response = await fetchImpl(url, localFetchOptions(url, {
       method: "GET",
       headers: { Accept: "application/json" },
       cache: "no-store",
       signal: bounded.signal,
     }));
   } catch (error) {
+    if (error?.name !== "AbortError" && error?.name !== "TimeoutError"
+      && await corsProbe(url, options.probeFetchImpl ?? fetchImpl, bounded.signal)) {
+      throw corsError(error, url);
+    }
     throw networkError(error, "reach", url);
   } finally {
     bounded.clear();
