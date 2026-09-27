@@ -386,3 +386,5 @@ dialog::backdrop { background: rgb(0 0 0 / 55%); }
   details { break-inside: avoid; }
   details > * { display: block !important; }
 }
+.icon-action svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
+.code-header select { width: auto; max-width: 12rem; margin-left: auto; font-size: .75rem; }

@@ -104,6 +104,16 @@ function handleCompletion(body, response) {
     return;
   }
   const last = body.messages.at(-1);
+  if (body.messages[0]?.content?.includes('"repairs"')) {
+    if (body.tools?.length || body.messages.length !== 2) throw new Error("Repair request leaked tools or conversation history");
+    const blocks = JSON.parse(last.content).blocks;
+    const fixes = { json: '{"answer":42}', mermaid: 'graph TD\n  A[Start] --> B[Done]', fs: 'let answer = 42', cpp: 'int main() { return 0; }' };
+    streamedCompletion(response, [
+      { choices: [{ delta: { content: JSON.stringify({ repairs: blocks.map((block) => ({ id: block.id, code: fixes[block.language] || block.code })) }) } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+    ]);
+    return;
+  }
   if (last?.role === "tool") {
     streamedCompletion(response, [
       { id: "fixture-tool-final", model: body.model, choices: [{ delta: { reasoning_content: "Use the returned tool evidence. " } }] },

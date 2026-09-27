@@ -11,6 +11,8 @@ const DEFAULT_FIRECRAWL = "http://localhost:3002";
 
 export const FEATURE_KEYS = Object.freeze([
   "streamRecovery",
+  "autoContinue",
+  "advancedLint",
   "autoMaxTokens",
   "richMarkdown",
   "parallelSessions",
@@ -204,6 +206,7 @@ function normalizedUndo(value) {
   return {
     type: "delete-message",
     index: Math.max(0, Math.trunc(Number(value.index) || 0)),
+    positions: Array.isArray(value.positions) ? value.positions.map((index) => Math.max(0, Math.trunc(Number(index) || 0))) : [],
     messages: value.messages.map((message) => createMessage(message.role, message.content, message)),
     attachments: Array.isArray(value.attachments) ? value.attachments.map(normalizedAttachment).filter(Boolean) : [],
     createdAt: iso(value.createdAt),
