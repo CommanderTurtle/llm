@@ -36,6 +36,8 @@ import {
   targetAddressSpaceForEndpoint,
 } from "./local-endpoint.js";
 import { copyText, renderMarkdown } from "./markdown.js";
+import { markdownFence, parseCombinedMarkdown } from "./combined-markdown.js";
+import { createCombinedBrowser } from "./combined-view.js";
 import { McpHttpClient } from "./mcp.js";
 import { discoverModelCatalog, OpenAIEndpointError, streamChatCompletion } from "./openai.js";
 import { markdownShareUrl } from "./share.js";
@@ -643,6 +645,22 @@ function messageMeta(message) {
   return parts.join(" · ");
 }
 
+function isCombinedAttachment(attachment) {
+  return attachment.text && (attachment.kind === "archive" || /(?:^|[/\\])combined\.md$/i.test(attachment.name));
+}
+
+function openCombinedPreview(text) {
+  const dialog = document.createElement("dialog");
+  dialog.setAttribute("aria-label", "Combined Markdown files");
+  dialog.style.cssText = "width:min(1100px,94vw);max-width:94vw";
+  const close = disclosureButton("Close", () => dialog.close());
+  const preview = document.createElement("div");
+  preview.append(documentPreviewContent(text, "combined.md", "markdown"));
+  dialog.append(close, preview);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal();
+}
+
 function attachmentCard(attachment) {
   const card = document.createElement("div");
   card.className = "attachment-card";
@@ -661,6 +679,7 @@ function attachmentCard(attachment) {
   meta.textContent = `${attachment.kind} · ${formatAttachmentSize(attachment.size)}`;
   text.append(name, meta);
   card.append(text);
+  if (isCombinedAttachment(attachment)) card.append(disclosureButton("Browse files", () => openCombinedPreview(attachment.text)));
   return card;
 }
 
@@ -924,6 +943,9 @@ function renderMessage(message, renderContext) {
   }
 
   const viewedImage = state.workspace.integrations.localTools.images ? scrapedImageCard(message) : null;
+  if (!resource && message.state !== "streaming" && parseCombinedMarkdown(message.content)) {
+    article.append(disclosureButton("Browse files", () => openCombinedPreview(message.content)));
+  }
   if (viewedImage) article.append(viewedImage);
 
   if (resource && resource.sections.length > 1) {
@@ -1295,7 +1317,9 @@ function renderPendingAttachments() {
     remove.textContent = "×";
     remove.setAttribute("aria-label", `Remove ${attachment.name}`);
     remove.addEventListener("click", () => removePendingAttachment(id));
-    chip.append(label, remove);
+    chip.append(label);
+    if (isCombinedAttachment(attachment)) chip.append(disclosureButton("Browse files", () => openCombinedPreview(attachment.text)));
+    chip.append(remove);
     fragment.append(chip);
   }
   elements.pendingAttachments.replaceChildren(fragment);
@@ -2778,6 +2802,15 @@ function renderDocumentDiff(documentValue, revision) {
   elements.documentDiff.replaceChildren(fragment);
 }
 
+function documentPreviewContent(content, name, language) {
+  const bundle = /(?:^|[/\\])combined\.md$/i.test(name || "") ? parseCombinedMarkdown(content) : null;
+  if (bundle) return createCombinedBrowser(bundle, content, (host, entry) => {
+    const markdown = ["md", "markdown"].includes(entry.language) || /\.(?:md|markdown)$/i.test(entry.path);
+    host.append(renderMarkdown(markdown ? entry.text : markdownFence(entry.text, entry.language), { rich: featureEnabled("richMarkdown") }));
+  });
+  return renderMarkdown(["md", "markdown"].includes(language) ? content : markdownFence(content, language || "text"), { rich: featureEnabled("richMarkdown") });
+}
+
 function renderWorkspaceDialog() {
   const current = session();
   renderTodos(current);
@@ -2809,8 +2842,7 @@ function renderWorkspaceDialog() {
   renderDocumentDiff(documentValue, documentValue?.revision);
   elements.documentPreview.replaceChildren();
   if (content) {
-    if (["markdown", "md"].includes(documentValue?.language)) elements.documentPreview.append(renderMarkdown(content, { rich: featureEnabled("richMarkdown") }));
-    else elements.documentPreview.append(renderMarkdown(`\`\`\`${documentValue?.language || "text"}\n${content}\n\`\`\``, { rich: featureEnabled("richMarkdown") }));
+    elements.documentPreview.append(documentPreviewContent(content, documentValue?.name, documentValue?.language));
   }
 }
 
@@ -2874,10 +2906,7 @@ function selectDocumentRevision() {
   elements.documentContent.readOnly = revision !== documentValue.revision;
   elements.saveDocument.disabled = revision !== documentValue.revision;
   renderDocumentDiff(documentValue, revision);
-  elements.documentPreview.replaceChildren(renderMarkdown(
-    ["markdown", "md"].includes(documentValue.language) ? snapshot.content : `\`\`\`${documentValue.language}\n${snapshot.content}\n\`\`\``,
-    { rich: featureEnabled("richMarkdown") },
-  ));
+  elements.documentPreview.replaceChildren(documentPreviewContent(snapshot.content, documentValue.name, documentValue.language));
 }
 
 async function importState(file) {

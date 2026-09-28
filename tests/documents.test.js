@@ -12,6 +12,13 @@ import {
   documentDraftFromResponse,
 } from "../src/documents.js";
 
+test("Markdown lint respects longer outer fences instead of closing on inner triples", () => {
+  assert.deepEqual(lintDocument("````markdown\n```json\n{\n```\n````"), []);
+  assert.deepEqual(lintDocument("`````text\n````\n```\n`````"), []);
+  assert.deepEqual(lintDocument("~~~text\n```json\n{\n```\n~~~~"), []);
+  assert.equal(lintDocument("````text\ncontent\n```")[0].message, "Unclosed ```` code fence.");
+});
+
 test("a response-backed PUT stores everything before a final standalone DONE line", () => {
   assert.equal(documentDraftFromResponse("# Release notes\n\nComplete body.\nDONE"), "# Release notes\n\nComplete body.");
   assert.equal(documentDraftFromResponse("DONE is ordinary prose.\n\nDONE   "), "DONE is ordinary prose.\n");

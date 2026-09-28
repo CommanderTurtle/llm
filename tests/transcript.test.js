@@ -10,6 +10,19 @@ import {
   normalizeParameters,
   parseConversationDocument,
 } from "../src/transcript.js";
+import { fencedBlocks } from "../src/turn-actions.js";
+
+test("exported attachment fences contain nested Markdown without changing blank lines", () => {
+  const text = "# readme\n\n\n\n\n````markdown\n```js\nx()\n```\n````\n";
+  const session = { title: "Nested", attachments: [{ id: "a", name: "combined.md", text }],
+    messages: [{ role: "user", content: "Inspect", attachments: ["a"] }, { role: "assistant", content: "Still outside the attachment" }] };
+  const markdown = conversationMarkdown(session);
+  const blocks = fencedBlocks(markdown);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].marker, "`````");
+  assert.equal(blocks[0].code, text.slice(0, -1));
+  assert.ok(markdown.slice(blocks[0].end).includes("Still outside the attachment"));
+});
 
 test("exports a versioned conversation with attachments and tool history", () => {
   const user = createMessage("user", "inspect", { attachments: ["image-1"] });

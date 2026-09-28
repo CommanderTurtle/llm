@@ -1,3 +1,5 @@
+import { markdownFence } from "./combined-markdown.js";
+
 export const CONVERSATION_SCHEMA = "https://llm.shel.sh/schemas/conversation-v2.json";
 export const LEGACY_CONVERSATION_SCHEMA = "https://llm.shel.sh/schemas/conversation-v1.json";
 export const CONVERSATION_VERSION = 2;
@@ -297,14 +299,14 @@ function baselineConversationMarkdown(session, attachmentMap) {
   if (session.model) lines.push(`Model: \`${session.model}\``, "");
   for (const message of session.messages ?? []) {
     if (message.role === "tool") {
-      lines.push(`<details><summary>Tool · ${message.name || message.toolCallId || "result"}</summary>`, "", "```text", message.content, "```", "", "</details>", "");
+      lines.push(`<details><summary>Tool · ${message.name || message.toolCallId || "result"}</summary>`, "", markdownFence(message.content || "", "text"), "", "</details>", "");
       continue;
     }
     lines.push(`## ${message.role[0].toUpperCase()}${message.role.slice(1)}`, "");
     if (message.reasoning) lines.push("<details><summary>Reasoning</summary>", "", message.reasoning, "", "</details>", "");
     lines.push(message.content || "", baselineAttachmentList(message, attachmentMap), "");
   }
-  return `${lines.join("\n").replace(/\n{4,}/g, "\n\n\n").trim()}\n`;
+  return `${lines.join("\n").trim()}\n`;
 }
 
 function markdownAttachmentDetails(message, attachmentMap) {
@@ -319,7 +321,7 @@ function markdownAttachmentDetails(message, attachmentMap) {
     if (attachment.kind === "image" && attachment.dataUrl) {
       lines.push(`<img src="${htmlAttribute(attachment.dataUrl)}" alt="${htmlAttribute(name)}">`, "");
     } else if (attachment.text) {
-      lines.push("```text", attachment.text, "```", "");
+      lines.push(markdownFence(attachment.text, "text"), "");
     }
     if (attachment.dataUrl) {
       lines.push(`<a href="${htmlAttribute(attachment.dataUrl)}" download="${htmlAttribute(name)}">Download exact attachment bytes</a>`, "");
@@ -337,9 +339,7 @@ function toolRequestDetails(message) {
     lines.push(
       `<details><summary>Tool request · ${call.function.name || "pending"} · ${call.id}</summary>`,
       "",
-      "```json",
-      typeof args === "string" ? args : JSON.stringify(args, null, 2),
-      "```",
+      markdownFence(typeof args === "string" ? args : JSON.stringify(args, null, 2), "json"),
       "",
       "</details>",
       "",
@@ -387,5 +387,5 @@ export function conversationMarkdown(session, options = {}) {
     lines.push(message.content || "", ...markdownAttachmentDetails(message, attachmentMap));
     if (message.error) lines.push(`> **Turn error:** ${message.error}`, "");
   }
-  return `${lines.join("\n").replace(/\n{4,}/g, "\n\n\n").trim()}\n`;
+  return `${lines.join("\n").trim()}\n`;
 }

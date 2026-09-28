@@ -145,11 +145,11 @@ export function lintDocument(content, language = "markdown") {
   let fence = null;
   let body = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^\s*(```|~~~)\s*([^\s`]*)/);
+    const match = lines[index].match(/^[ \t]*(`{3,}|~{3,})[ \t]*([^\s`]*)/);
     if (!fence && match) {
       fence = { marker: match[1], language: (match[2] || "text").toLowerCase(), line: index + 1 };
       body = [];
-    } else if (fence && new RegExp(`^\\s*${fence.marker}\\s*$`).test(lines[index])) {
+    } else if (fence && new RegExp(`^[ \\t]*${fence.marker[0]}{${fence.marker.length},}[ \\t]*$`).test(lines[index])) {
       diagnostics.push(...lintCode(body.join("\n"), fence.language, fence.line));
       fence = null;
       body = [];
