@@ -1,0 +1,13 @@
+[
+  { "package": "mermaid", "version": "11.17.2", "file": "resources/markdown/mermaid.min.js" },
+  { "package": "highlight.js", "version": "11.12.0", "file": "resources/markdown/highlight.min.js" },
+  { "package": "temml", "version": null, "file": "resources/markdown/temml.min.mjs" },
+  { "package": "jszip", "version": "3.10.1", "file": "resources/jszip/jszip.min.js" },
+  { "package": "tesseract.js", "version": "7.0.0", "file": "resources/tesseract/tesseract.min.js" },
+  { "package": "tesseract.js-core", "version": null, "file": "resources/tesseract/core/tesseract-core-lstm.wasm.js" },
+  { "package": "@tesseract.js-data/eng", "version": "1.0.0", "file": "resources/tesseract/lang/eng.traineddata.gz" },
+  { "package": "web-tree-sitter", "version": "0.25.10", "file": "resources/lint/web-tree-sitter.js" },
+  { "package": "tree-sitter-wasms", "version": "0.1.13", "file": "resources/lint/tree-sitter-json.wasm" },
+  { "package": "tree-sitter-fsharp", "version": "0.3.12", "file": "resources/lint/tree-sitter-fsharp.wasm" },
+  { "package": "@tree-sitter-grammars/tree-sitter-yaml", "version": "0.7.1", "file": "resources/lint/tree-sitter-yaml.wasm" }
+]

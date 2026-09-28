@@ -2,11 +2,13 @@
   "name": "llm",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "bun scripts/dev-server.mjs",
     "test:browser": "bun scripts/browser-fixture.mjs",
     "test": "bun test",
+    "check:updates": "bun tests/check-updates.mjs",
     "check": "bun test && bun scripts/check.mjs"
   },
   "packageManager": "bun@1.4.0"
