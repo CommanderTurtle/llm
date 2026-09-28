@@ -1,4 +1,5 @@
 import { messageId } from "./transcript.js";
+import { markdownFence } from "./combined-markdown.js";
 
 export const DEFAULT_CONTEXT_WINDOW = 131_072;
 export const RESOURCE_SECTION_CHARS = 12_000;
@@ -322,6 +323,32 @@ export function resourceIndex(resource, options = {}) {
     lines.push(resource.sections[0]);
   }
   return lines.join("\n");
+}
+
+export function firecrawlExportProjection(session) {
+  const resources = new Map((session.resources ?? []).map((resource) => [resource.id, resource]));
+  const messages = (session.messages ?? []).map((message) => {
+    if (message.role !== "tool" || !["web_search", "web_scrape"].includes(message.name) || !message.content) return message;
+    const resource = resources.get(message.meta?.resourceId);
+    // Reuse existing boundaries only when they still represent the exact edited result.
+    const sections = Array.isArray(resource?.sections) && resource.sections.length
+      && resource.sections.every((section) => typeof section === "string")
+      && resource.sections.join("") === message.content
+      ? resource.sections : segmentMarkdown(message.content);
+    if (sections.length < 2) return message;
+    const content = [
+      `**Firecrawl · section 1 of ${sections.length}**`,
+      "",
+      "Later raw sections are omitted from this copy, not from the saved chat. Context-read results are still included in full.",
+      "",
+      ...sections.map((section, index) => `- Section ${index + 1} · ${section.length.toLocaleString()} characters · ${index === 0 ? "included below" : "omitted from this copy"}`),
+      "",
+      // A section boundary may cut through a code fence; keep it literal so it cannot swallow later turns.
+      markdownFence(sections[0], "text"),
+    ].join("\n");
+    return { ...message, content };
+  });
+  return { ...session, messages };
 }
 
 export function compactionEnvelope(compaction, messages) {

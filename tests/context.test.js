@@ -7,6 +7,7 @@ import {
   compactionEnvelopes,
   compactionSearchTerms,
   createContextResource,
+  firecrawlExportProjection,
   isContextLimitError,
   markResourceSectionRead,
   resourceIndex,
@@ -18,7 +19,63 @@ import {
   sessionContextStats,
   timelineMarkdown,
 } from "../src/context.js";
-import { createMessage } from "../src/transcript.js";
+import { conversationMarkdown, createMessage } from "../src/transcript.js";
+import { fencedBlocks } from "../src/turn-actions.js";
+
+test("collapsed export keeps the first Firecrawl section and all other originals without mutating the chat", () => {
+  const first = "https://example.com/source\n\n```js\nfirst();\n";
+  const later = "laterRawOnly();\n```\n";
+  const raw = first + later;
+  const session = {
+    title: "Export fixture",
+    resources: [{ id: "r", content: raw, sections: [first, later] }],
+    messages: [
+      createMessage("tool", raw, { id: "scrape", name: "web_scrape", toolCallId: "s", meta: { resourceId: "r" } }),
+      createMessage("tool", later, { id: "read", name: "context_read", toolCallId: "r", meta: { resourceId: "r" } }),
+      createMessage("tool", raw, { id: "search", name: "web_search", toolCallId: "q", meta: { resourceId: "r" } }),
+      createMessage("assistant", "Final response", { reasoning: "Reasoning preserved" }),
+      createMessage("tool", raw, { name: "other_tool", toolCallId: "o" }),
+    ],
+    compactions: [{ id: "c", active: true, mode: "soft", summary: "Collapsed reads", messageIds: ["scrape", "read"] }],
+  };
+  const saved = structuredClone(session);
+  const normal = conversationMarkdown(session);
+  const projected = firecrawlExportProjection(session);
+  assert.deepEqual(session, saved);
+  assert.equal(conversationMarkdown(session), normal);
+  for (const index of [0, 2]) {
+    assert.match(projected.messages[index].content, /section 1 of 2/);
+    assert.match(projected.messages[index].content, /Section 2.*omitted from this copy/);
+    assert.ok(projected.messages[index].content.includes(first));
+    assert.ok(!projected.messages[index].content.includes(later));
+    const blocks = fencedBlocks(projected.messages[index].content);
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].closed, true);
+  }
+  for (const index of [1, 3, 4]) assert.equal(projected.messages[index], session.messages[index]);
+  assert.equal(projected.compactions, session.compactions);
+  const markdown = conversationMarkdown(projected);
+  assert.ok(markdown.includes(later));
+  assert.match(markdown, /Final response|Reasoning preserved/);
+  assert.match(markdown, /Collapsed reads/);
+});
+
+test("collapsed export sections unindexed and edited results but leaves short results intact", () => {
+  const raw = "FIRST ".repeat(2_000) + "TAIL_RAW_ONLY";
+  const stale = { id: "stale", sections: ["obsolete", "content"] };
+  const session = { resources: [stale], messages: [
+    createMessage("tool", raw, { name: "web_scrape", toolCallId: "s" }),
+    createMessage("tool", raw, { name: "web_search", toolCallId: "q", meta: { resourceId: "stale" } }),
+    createMessage("tool", "Small complete result", { name: "web_search", toolCallId: "short" }),
+  ] };
+  const projected = firecrawlExportProjection(session);
+  for (const message of projected.messages.slice(0, 2)) {
+    assert.ok(message.content.includes(segmentMarkdown(raw)[0]));
+    assert.doesNotMatch(message.content, /TAIL_RAW_ONLY|obsolete/);
+    assert.match(message.content, /section 1 of 2/);
+  }
+  assert.equal(projected.messages[2], session.messages[2]);
+});
 
 test("long browser results become ordered lossless Markdown sections", () => {
   const source = `# Start  \n\n${"alpha ".repeat(18)}\n\n## End\n${"omega ".repeat(18)}`;

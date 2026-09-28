@@ -5,6 +5,7 @@ import {
   compactionSearchTerms,
   createContextResource,
   estimateTokens,
+  firecrawlExportProjection,
   isContextLimitError,
   markResourceSectionRead,
   resourceIndex,
@@ -2249,12 +2250,14 @@ function exportActiveMarkdown() {
   toast("Conversation Markdown exported");
 }
 
-async function copyActiveMarkdown() {
+async function copyActiveMarkdown(event) {
   if (!featureEnabled("markdownActions")) return;
   syncSessionFromForm();
   try {
-    await copyText(conversationMarkdown(session(), { complete: true }));
-    toast("Conversation Markdown copied");
+    const collapsed = event?.ctrlKey === true;
+    const current = collapsed ? firecrawlExportProjection(session()) : session();
+    await copyText(conversationMarkdown(current, { complete: true }));
+    toast(collapsed ? "Markdown copied · Firecrawl sections collapsed" : "Conversation Markdown copied");
   } catch (error) {
     toast(error instanceof Error ? error.message : "Copy failed", 5_000);
   }
