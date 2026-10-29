@@ -1,0 +1,6 @@
+# Keep the recorded bytes identical to the SHA-256 manifest on all OSes.
+/resources/ppocr/** -text -whitespace
+/resources/ppocr/assets/** -diff
+/resources/ppocr/runtime/** -diff
+/resources/ppocr/models/** -diff
+/resources/speech/** -text -whitespace

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="300" viewBox="0 0 1000 300">
+  <rect width="1000" height="300" fill="white"/>
+  <g font-family="Arial, sans-serif" font-size="42" fill="black">
+    <text x="40" y="80">LOCAL OCR FIXTURE</text>
+    <text x="40" y="155">Paddle and Tesseract</text>
+    <text x="40" y="230">Browser only 12345</text>
+  </g>
+</svg>

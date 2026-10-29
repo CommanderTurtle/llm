@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>llm OCR fixture</title>
+  <link rel="stylesheet" href="../styles.css" />
+  <main>
+    <h1>llm OCR fixture</h1>
+    <p>Uses the real ocr_attachment dispatcher, local workers and a generated screenshot. No model server.</p>
+    <button id="tesseract" type="button">Test Tesseract</button>
+    <button id="paddle" type="button">Test Paddle</button>
+    <button id="release" type="button">Release worker</button>
+    <p id="status" role="status">Ready. Neither OCR runtime has loaded.</p>
+    <pre id="output"></pre>
+    <img src="./fixtures/ocr.svg" alt="OCR fixture: LOCAL OCR FIXTURE; Paddle and Tesseract; Browser only 12345" width="700" />
+  </main>
+  <script type="module" src="./ocr-browser.js"></script>
+</html>

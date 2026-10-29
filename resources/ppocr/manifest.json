@@ -1,0 +1,109 @@
+{
+  "source": "ppocr-wasm@0.1.0",
+  "sdk": "@paddleocr/paddleocr-js@0.4.2",
+  "ort": "onnxruntime-web@1.30.0",
+  "models": {
+    "detection": {
+      "name": "PP-OCRv6_small_det",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_small_det_onnx_infer.tar",
+      "sha256": "d218f6fbf0f1c23d2161bd6ac7f5eaa6104fa89955c09290497e31008e2618e4"
+    },
+    "recognition": {
+      "name": "PP-OCRv6_small_rec",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_small_rec_onnx_infer.tar",
+      "sha256": "d267ab077a44a0eedb1ea8f8c542d263f211de8e9d7a029bf9fcfff7e5a88fb1"
+    }
+  },
+  "defaultBackend": "wasm",
+  "defaultThreads": 1,
+  "files": {
+    "LICENSE": {
+      "bytes": 1080,
+      "sha256": "81be817e1be1740e7329280bfba3feacab9b7f0c0d15fe26ea1ab3412547c190"
+    },
+    "README.md": {
+      "bytes": 5509,
+      "sha256": "ed9d846eafd923d29c0557d1a7f52b595bd55f3899a2b3d82a7ef1ef21329ce0"
+    },
+    "RESEARCH.md": {
+      "bytes": 3587,
+      "sha256": "6ba00d315c5c048a5225235882bbc8b3dd94b65f0b15241316020294ba013a31"
+    },
+    "assets/ort.all.min-Cg8m36Ta.js": {
+      "bytes": 805397,
+      "sha256": "ba15564b09a615446cc87db69ef9d116b973efe1e58a1dfae2c3e2beeb4ba9e2"
+    },
+    "assets/worker-B_P0Qz0f.js": {
+      "bytes": 25600436,
+      "sha256": "cc68e160c7c3ccb981ae771a585b0db563f9849c5c3eff509581abbe24899248"
+    },
+    "build.json": {
+      "bytes": 717,
+      "sha256": "da738e88694d8f40a33d868965818f4a88a3649e52fcf8b888710d92f5972d7c"
+    },
+    "licenses/Clipper.txt": {
+      "bytes": 1438,
+      "sha256": "7a98a9bf5bac5ab4a28aa14a5fe9c9e5e9ed37710ccfec0231d2aaebd4af9568"
+    },
+    "licenses/JSBN.txt": {
+      "bytes": 1544,
+      "sha256": "e0e396530fd1624126e9a7e0df94811e4062e03baeccb07bc33c934b0fd93a85"
+    },
+    "licenses/ONNX-Runtime.txt": {
+      "bytes": 1073,
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+    },
+    "licenses/OpenCV.txt": {
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    "licenses/PaddleOCR.txt": {
+      "bytes": 11577,
+      "sha256": "8ae60061cdd89d5b70a5d71b2816ecc0da0bee21947688bff4b39928512a45af"
+    },
+    "licenses/js-yaml.txt": {
+      "bytes": 1084,
+      "sha256": "a07bc24468b9654ce76a547d47a2db282d07733b715db4c73a98bd63961f9550"
+    },
+    "licenses/omarchy-ppocr.txt": {
+      "bytes": 1104,
+      "sha256": "346eb8f2e99c7979f35cc568cd7abed9b629aaf88a5b40bee67ecfc53488b890"
+    },
+    "models.json": {
+      "bytes": 588,
+      "sha256": "053fbba6901ddb2a629c53aa23440552e28032a42aeee43ce8d63f071e956407"
+    },
+    "models/PP-OCRv6_small_det.tar": {
+      "bytes": 9891840,
+      "sha256": "d218f6fbf0f1c23d2161bd6ac7f5eaa6104fa89955c09290497e31008e2618e4"
+    },
+    "models/PP-OCRv6_small_rec.tar": {
+      "bytes": 21319680,
+      "sha256": "d267ab077a44a0eedb1ea8f8c542d263f211de8e9d7a029bf9fcfff7e5a88fb1"
+    },
+    "ppocr.d.ts": {
+      "bytes": 2828,
+      "sha256": "1a12a8ffec5a3d6e5bf8c19a8af15637b7ed307e4d0a4e32310c24ed198dfc97"
+    },
+    "ppocr.js": {
+      "bytes": 11811,
+      "sha256": "131800efb9c86a89cb6f007ed0477136429663eadd97a4cdb09e6b5046551078"
+    },
+    "runtime/ort-wasm-simd-threaded.jsep.mjs": {
+      "bytes": 46851,
+      "sha256": "709853412fd1ffc34247af1e73569227b5b79629c5ca3f59cc39cf7e500e4947"
+    },
+    "runtime/ort-wasm-simd-threaded.jsep.wasm": {
+      "bytes": 28312028,
+      "sha256": "3ad23231b5bd6d9dda55a7f84606315e0bf35b6750c28ee993c987c54cacab0f"
+    },
+    "runtime/ort-wasm-simd-threaded.mjs": {
+      "bytes": 24381,
+      "sha256": "e13f7f94fc51b4ca72b12faeb1ee95f4ace6dfbc8939bc718aabdc0a27c4299b"
+    },
+    "runtime/ort-wasm-simd-threaded.wasm": {
+      "bytes": 14239897,
+      "sha256": "3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2"
+    }
+  }
+}
