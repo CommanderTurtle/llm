@@ -181,6 +181,19 @@ summary { cursor: pointer; font-size: 0.84rem; font-weight: 680; }
 .field-grid label { margin: 0; }
 .check-row { display: flex !important; align-items: center; gap: 0.5rem; color: var(--text) !important; }
 .check-row input { width: auto; margin: 0; }
+.ocr-control { display: grid; gap: 0.35rem; min-width: 0; margin: 0.8rem 0 0; padding: 0; border: 0; }
+.ocr-control legend { padding: 0; color: var(--muted); font-size: 0.78rem; font-weight: 650; }
+.ocr-dial { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-alt); }
+.ocr-dial input { position: absolute; opacity: 0; pointer-events: none; }
+.settings .ocr-dial label { z-index: 1; min-width: 3rem; margin: 0; padding: 0.58rem 0.7rem; color: var(--muted); text-align: center; font: 700 0.74rem ui-monospace, monospace; cursor: pointer; user-select: none; transition: color 150ms; }
+.ocr-dial input:checked + label { color: var(--accent-text); }
+.ocr-dial input:focus-visible + label { outline: 2px solid var(--focus); outline-offset: -3px; }
+.ocr-dial-thumb { position: absolute; z-index: 0; inset: 0 auto 0 0; width: calc(100% / 3); border-radius: 999px; background: var(--accent); pointer-events: none; transition: transform 170ms; }
+#ocr-v2:checked ~ .ocr-dial-thumb { transform: translateX(100%); }
+#ocr-off:checked ~ .ocr-dial-thumb { transform: translateX(200%); }
+@media (prefers-reduced-motion: reduce) {
+  .ocr-dial-thumb, .settings .ocr-dial label { transition: none; }
+}
 .tool-group { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
 .feature-matrix { display: grid; gap: 0.55rem; margin-top: 0.8rem; }
 .feature-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.65rem; align-items: start; padding: 0.65rem; border: 1px solid var(--border); border-radius: 0.55rem; background: color-mix(in srgb, var(--panel) 88%, var(--accent) 12%); cursor: pointer; touch-action: none; user-select: none; }

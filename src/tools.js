@@ -68,7 +68,7 @@ export function openAiTools(integrations, mcpConnections = new Map(), options = 
       type: "function",
       function: {
         name: OCR_TOOL_NAME,
-        description: "Read visible text from an image attached anywhere in this chat using the browser's local Tesseract OCR runtime. Pass its attachment id or exact filename.",
+        description: `Read visible text from an image attached anywhere in this chat using the browser's local ${integrations.ocr.engine === "paddle" ? "Paddle" : "Tesseract"} OCR runtime. Pass its attachment id or exact filename.`,
         parameters: {
           type: "object",
           properties: { attachment: { type: "string", description: "Attachment id or exact filename." } },
@@ -273,7 +273,11 @@ export async function executeTool(call, context) {
   if (name === OCR_TOOL_NAME) {
     if (context.integrations.ocr?.enabled !== true) throw new Error("Local image OCR is disabled.");
     const attachment = findAttachment(context.attachments, args.attachment);
-    return ocrImageAttachment(attachment, { onProgress: context.onProgress });
+    return ocrImageAttachment(attachment, {
+      engine: context.integrations.ocr.engine,
+      onProgress: context.onProgress,
+      signal: context.signal,
+    });
   }
   if (name === SEARCH_TOOL_NAME) {
     if (context.integrations.firecrawl?.enabled !== true) throw new Error("Firecrawl is disabled.");

@@ -1,6 +1,7 @@
 import { createMessage, messageId, normalizeParameters, parseConversationDocument } from "./transcript.js";
 import { createBrowserDocument } from "./documents.js";
 import { analyzeResourceSections } from "./context.js";
+import { normalizeOcrSettings } from "./ocr-settings.js";
 
 export const LEGACY_WORKSPACE_SCHEMA = "https://llm.shel.sh/schemas/workspace-v1.json";
 export const WORKSPACE_SCHEMA = "https://llm.shel.sh/schemas/workspace-v2.json";
@@ -85,7 +86,7 @@ export function defaultIntegrations() {
   return {
     approval: "ask",
     maxToolRounds: 8,
-    ocr: { enabled: true },
+    ocr: normalizeOcrSettings(),
     features: defaultFeatures(),
     localTools: { context: false, images: false, read: false, write: false, todos: false },
     firecrawl: { enabled: false, url: DEFAULT_FIRECRAWL, limit: 5 },
@@ -101,7 +102,7 @@ export function normalizeIntegrations(value = {}) {
   return {
     approval,
     maxToolRounds,
-    ocr: { enabled: value.ocr?.enabled !== false },
+    ocr: normalizeOcrSettings(value.ocr),
     features,
     localTools: {
       context: features.readTools || features.compaction,

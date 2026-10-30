@@ -1,11 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createOcrService, ocrImageAttachment } from "../src/ocr.js";
+import { ocrMode, ocrSettings } from "../src/ocr-settings.js";
 import { createWorkspace, normalizeIntegrations, parseWorkspaceDocument, workspaceDocument } from "../src/workspace.js";
-import { openAiTools } from "../src/tools.js";
+import { executeTool, openAiTools } from "../src/tools.js";
 
 const image = { kind: "image", dataUrl: "data:image/png;base64,fixture" };
 const result = (text) => ({ data: { text } });
+
+test("the v1/v2/off selector preserves engines and exposes exactly the selected tool", async () => {
+  assert.equal(ocrMode(), "v1");
+  let settings = ocrSettings("v2");
+  assert.deepEqual(settings, { enabled: true, engine: "paddle" });
+  assert.equal(ocrMode(settings), "v2");
+  settings = ocrSettings("off", settings);
+  assert.deepEqual(settings, { enabled: false, engine: "paddle" });
+  assert.equal(ocrMode(settings), "off");
+  const integrations = normalizeIntegrations({ ocr: settings });
+  assert.equal(openAiTools(integrations).length, 0);
+  await assert.rejects(() => executeTool({ function: { name: "ocr_attachment", arguments: '{}' } }, {
+    integrations, attachments: [image],
+  }), /Local image OCR is disabled/);
+  settings = ocrSettings("v1", settings);
+  assert.deepEqual(settings, { enabled: true, engine: "tesseract" });
+  assert.equal(ocrMode(settings), "v1");
+  const tools = openAiTools(normalizeIntegrations({ ocr: settings }));
+  assert.equal(tools.length, 1);
+  assert.match(tools[0].function.description, /local Tesseract OCR/);
+});
 
 test("OCR defaults and legacy workspaces keep Tesseract, including disabled OCR", () => {
   assert.deepEqual(createWorkspace().integrations.ocr, { enabled: true, engine: "tesseract" });

@@ -41,6 +41,8 @@ import { markdownFence, parseCombinedMarkdown } from "./combined-markdown.js";
 import { createCombinedBrowser } from "./combined-view.js";
 import { McpHttpClient } from "./mcp.js";
 import { discoverModelCatalog, OpenAIEndpointError, streamChatCompletion } from "./openai.js";
+import { terminateOcrWorker } from "./ocr.js";
+import { ocrMode, ocrSettings } from "./ocr-settings.js";
 import { markdownShareUrl } from "./share.js";
 import { applyCodeRepairs, fencedBlocks, shouldAutoContinue, expandMessageSelection, removeSelectedEntries, restoreDeletedEntries } from "./turn-actions.js";
 import { advancedLint, clearAdvancedLint } from "./advanced-lint.js";
@@ -130,7 +132,9 @@ const elements = {
   printChat: document.querySelector("#print-chat"),
   approval: document.querySelector("#tool-approval"),
   maxToolRounds: document.querySelector("#max-tool-rounds"),
-  ocrEnabled: document.querySelector("#ocr-enabled"),
+  ocrV1: document.querySelector("#ocr-v1"),
+  ocrV2: document.querySelector("#ocr-v2"),
+  ocrOff: document.querySelector("#ocr-off"),
   readToolsEnabled: document.querySelector("#read-tools-enabled"),
   writeToolsEnabled: document.querySelector("#write-tools-enabled"),
   todoToolsEnabled: document.querySelector("#todo-tools-enabled"),
@@ -405,7 +409,11 @@ function syncIntegrationsFromForm() {
   const integrations = state.workspace.integrations;
   integrations.approval = elements.approval.value === "always" ? "always" : "ask";
   integrations.maxToolRounds = Math.max(1, Math.min(16, Math.trunc(Number(elements.maxToolRounds.value) || 8)));
-  integrations.ocr.enabled = elements.ocrEnabled.checked;
+  const previousOcr = integrations.ocr;
+  integrations.ocr = ocrSettings(elements.ocrOff.checked ? "off" : elements.ocrV2.checked ? "v2" : "v1", previousOcr);
+  if (previousOcr.enabled && (!integrations.ocr.enabled || previousOcr.engine !== integrations.ocr.engine)) {
+    void terminateOcrWorker().catch((error) => console.warn("OCR cleanup failed.", error));
+  }
   integrations.features = Object.fromEntries(FEATURE_KEYS.map((key) => [key, featureControls[key].checked]));
   if (integrations.features.writeTools && !integrations.features.readTools) {
     integrations.features.readTools = true;
@@ -421,7 +429,11 @@ function writeIntegrations() {
   const integrations = state.workspace.integrations;
   elements.approval.value = integrations.approval;
   elements.maxToolRounds.value = String(integrations.maxToolRounds);
-  elements.ocrEnabled.checked = integrations.ocr.enabled;
+  const mode = ocrMode(integrations.ocr);
+  elements.ocrV1.checked = mode === "v1";
+  elements.ocrV2.checked = mode === "v2";
+  elements.ocrOff.checked = mode === "off";
+  void terminateOcrWorker().catch((error) => console.warn("OCR cleanup failed.", error));
   for (const key of FEATURE_KEYS) featureControls[key].checked = integrations.features[key];
   deriveLocalTools();
   if (integrations.features.imageReads) for (const current of state.workspace.sessions) hydrateScrapedImageResources(current);
@@ -3241,7 +3253,7 @@ for (const input of [
   elements.maxTokens, elements.contextWindow, elements.seed, elements.reasoningEffort, elements.enableThinking, elements.prompt,
 ]) input.addEventListener("input", handleSessionFormInput);
 for (const input of [
-  elements.approval, elements.maxToolRounds, elements.ocrEnabled, elements.firecrawlEnabled,
+  elements.approval, elements.maxToolRounds, elements.ocrV1, elements.ocrV2, elements.ocrOff, elements.firecrawlEnabled,
   elements.firecrawlUrl, elements.firecrawlLimit,
 ]) input.addEventListener("input", handleIntegrationInput);
 for (const input of Object.values(featureControls)) input.addEventListener("input", handleFeatureInput);
