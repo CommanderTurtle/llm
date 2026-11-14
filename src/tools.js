@@ -58,6 +58,7 @@ export function parseToolArguments(value) {
 
 export function openAiTools(integrations, mcpConnections = new Map(), options = {}) {
   const tools = [];
+  const readRule = integrations.requireRead ? " Existing documents require a current read receipt before editing." : "";
   const resources = Array.isArray(options.resources) ? options.resources : [];
   const imageResources = integrations.localTools?.images === true ? resources.filter(resourceHasImages) : [];
   const searchableResources = integrations.localTools?.context === true
@@ -166,7 +167,7 @@ export function openAiTools(integrations, mcpConnections = new Map(), options = 
       type: "function",
       function: {
         name: READ_DOCUMENT_TOOL_NAME,
-        description: "Read a browser-local editor document with revision, stable per-line hashes, and lint diagnostics. An existing document must be read at its current revision before put_document may edit it.",
+        description: "Read a browser-local editor document with revision, stable per-line hashes, and lint diagnostics." + readRule,
         parameters: {
           type: "object",
           properties: { name: { type: "string", description: "Exact document name." } },
@@ -183,7 +184,7 @@ export function openAiTools(integrations, mcpConnections = new Map(), options = 
       },
     });
   }
-  if (integrations.localTools?.read === true && integrations.localTools?.write === true) {
+  if (integrations.localTools?.write === true) {
     const putParameters = {
       type: "object",
       properties: {
@@ -214,14 +215,14 @@ export function openAiTools(integrations, mcpConnections = new Map(), options = 
       type: "function",
       function: {
         name: PUT_DOCUMENT_TOOL_NAME,
-        description: "Create, replace, or hashline-edit a browser-local document. Preferred full-document workflow: write the Markdown/code normally in this assistant response, put DONE alone on the final line, then call put_document with name, optional language/expected_revision, and from_response=true. Do not JSON-escape or duplicate the document in tool arguments; the browser stores the exact response text before DONE. For a small edit, first read the current revision and pass only edits with stable line hashes. Existing documents always require a current read_document receipt. Every successful PUT creates an immutable diffable revision.",
+        description: "Create, replace, or hashline-edit a browser-local document. Preferred full-document workflow: write the Markdown/code normally in this assistant response, put DONE alone on the final line, then call put_document with name, optional language/expected_revision, and from_response=true. Do not JSON-escape or duplicate the document in tool arguments; the browser stores the exact response text before DONE. For a small edit, read the current revision and pass edits with stable line hashes. Every successful PUT creates an immutable diffable revision." + readRule,
         parameters: putParameters,
       },
     }, {
       type: "function",
       function: {
         name: PUT_INSTRUCTIONS_TOOL_NAME,
-        description: "Create, replace, or hashline-edit instructions.md. For a full document, write it normally in this response, end with DONE on its own line, and call instructions_put with from_response=true; never squeeze the whole document into JSON. For a small edit, use hashline edits after instructions_read. Existing instructions require a current read receipt.",
+        description: "Create, replace, or hashline-edit instructions.md. For a full document, write it normally in this response, end with DONE on its own line, and call instructions_put with from_response=true; never squeeze the whole document into JSON. For a small edit, use hashline edits after instructions_read." + readRule,
         parameters: {
           ...putParameters,
           properties: Object.fromEntries(Object.entries(putParameters.properties).filter(([key]) => key !== "name")),

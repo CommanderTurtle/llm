@@ -309,13 +309,15 @@ export class McpHttpClient {
     return result;
   }
 
-  async close() {
+  async close(options = {}) {
     if (this.mode !== "legacy" || !this.sessionId) return;
+    const sessionId = this.sessionId;
+    this.sessionId = "";
     await this.fetchImpl(this.url, localFetchOptions(this.url, {
       method: "DELETE",
-      headers: { "MCP-Protocol-Version": this.protocolVersion, "Mcp-Session-Id": this.sessionId },
+      keepalive: options.keepalive === true,
+      headers: { "MCP-Protocol-Version": this.protocolVersion, "Mcp-Session-Id": sessionId },
     })).catch(() => {});
-    this.sessionId = "";
   }
 }
 

@@ -1,10 +1,5 @@
 import { messageId } from "./transcript.js";
 
-const CODE_LANGUAGES = new Set([
-  "js", "javascript", "jsx", "ts", "typescript", "tsx", "json", "css", "html", "xml",
-  "py", "python", "sh", "bash", "powershell", "ps1", "c", "cpp", "csharp", "cs", "java", "rust", "rs",
-]);
-
 export function lineHash(value) {
   let hash = 0x811c9dc5;
   const bytes = new TextEncoder().encode(String(value));
@@ -54,65 +49,10 @@ export function createBrowserDocument(additions = {}) {
 
 export function languageFromName(name = "") {
   const extension = String(name).toLowerCase().split(".").pop();
-  const aliases = { md: "markdown", mjs: "javascript", cjs: "javascript", jsx: "javascript", tsx: "typescript", py: "python", rs: "rust", ps1: "powershell", yml: "yaml" };
+  const aliases = { md: "markdown", mjs: "javascript", cjs: "javascript", jsx: "javascript", py: "python", rs: "rust", ps1: "powershell", yml: "yaml" };
   return aliases[extension] || extension || "text";
 }
 
-function scanDelimiters(source, language, lineOffset = 0) {
-  if (!CODE_LANGUAGES.has(language)) return [];
-  const pairs = { "(": ")", "[": "]", "{": "}" };
-  const closing = new Set(Object.values(pairs));
-  const stack = [];
-  const diagnostics = [];
-  let line = 1;
-  let column = 0;
-  let quote = "";
-  let escape = false;
-  let lineComment = false;
-  let blockComment = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index];
-    const next = source[index + 1] || "";
-    column += 1;
-    if (char === "\n") {
-      line += 1;
-      column = 0;
-      lineComment = false;
-      continue;
-    }
-    if (lineComment) continue;
-    if (blockComment) {
-      if (char === "*" && next === "/") { blockComment = false; index += 1; column += 1; }
-      continue;
-    }
-    if (quote) {
-      if (escape) escape = false;
-      else if (char === "\\") escape = true;
-      else if (char === quote) quote = "";
-      continue;
-    }
-    if (char === "/" && next === "/") { lineComment = true; index += 1; column += 1; continue; }
-    if (char === "/" && next === "*") { blockComment = true; index += 1; column += 1; continue; }
-    if (char === '"' || char === "'" || char === "`") { quote = char; continue; }
-    if (pairs[char]) stack.push({ char, line, column });
-    else if (closing.has(char)) {
-      const open = stack.pop();
-      if (!open || pairs[open.char] !== char) {
-        diagnostics.push({ line: line + lineOffset, column, message: `Unexpected ${char}.`, severity: "error" });
-        if (open) stack.push(open);
-      }
-    }
-  }
-  for (const open of stack.slice(-20)) diagnostics.push({
-    line: open.line + lineOffset,
-    column: open.column,
-    message: `Unclosed ${open.char}.`,
-    severity: "error",
-  });
-  if (quote) diagnostics.push({ line: line + lineOffset, column: Math.max(1, column), message: "Unclosed string literal.", severity: "error" });
-  if (blockComment) diagnostics.push({ line: line + lineOffset, column: Math.max(1, column), message: "Unclosed block comment.", severity: "error" });
-  return diagnostics;
-}
 
 function jsonDiagnostic(source, lineOffset = 0) {
   try {
@@ -132,8 +72,9 @@ function jsonDiagnostic(source, lineOffset = 0) {
 
 export function lintCode(source, language = "text", lineOffset = 0) {
   const normalized = String(language).toLowerCase();
-  if (normalized === "json" || normalized === "jsonc") return normalized === "json" ? jsonDiagnostic(source, lineOffset) : scanDelimiters(source, "json", lineOffset);
-  return scanDelimiters(source, normalized, lineOffset);
+  // Only the real JSON parser is synchronous. Other languages use the optional
+  // worker grammar, rather than guessing their comments/strings with a JS lexer.
+  return normalized === "json" ? jsonDiagnostic(source, lineOffset) : [];
 }
 
 export function lintDocument(content, language = "markdown") {
@@ -218,7 +159,7 @@ export function applyHashlineEdits(content, edits) {
 export function putBrowserDocument(documentValue, args, additions = {}) {
   const now = new Date().toISOString();
   const existing = documentValue ? createBrowserDocument(documentValue) : null;
-  if (existing && additions.readRevision !== existing.revision) {
+  if (existing && additions.requireRead === true && additions.readRevision !== existing.revision) {
     throw new Error(`Read-before-write failed: ${existing.name} revision ${existing.revision} must be read before it can be edited.`);
   }
   if (existing && args.expected_revision != null && Number(args.expected_revision) !== existing.revision) {

@@ -2,6 +2,7 @@ import { createMessage, messageId, normalizeParameters, parseConversationDocumen
 import { createBrowserDocument } from "./documents.js";
 import { analyzeResourceSections } from "./context.js";
 import { normalizeOcrSettings } from "./ocr-settings.js";
+import { speechSettings } from "./speech-settings.js";
 
 export const LEGACY_WORKSPACE_SCHEMA = "https://llm.shel.sh/schemas/workspace-v1.json";
 export const WORKSPACE_SCHEMA = "https://llm.shel.sh/schemas/workspace-v2.json";
@@ -85,8 +86,10 @@ function normalizedMcpServer(value, index) {
 export function defaultIntegrations() {
   return {
     approval: "ask",
+    requireRead: false,
     maxToolRounds: 8,
     ocr: normalizeOcrSettings(),
+    speech: speechSettings(),
     features: defaultFeatures(),
     localTools: { context: false, images: false, read: false, write: false, todos: false },
     firecrawl: { enabled: false, url: DEFAULT_FIRECRAWL, limit: 5 },
@@ -101,14 +104,16 @@ export function normalizeIntegrations(value = {}) {
   const features = normalizeFeatures(value.features);
   return {
     approval,
+    requireRead: value.requireRead === true,
     maxToolRounds,
     ocr: normalizeOcrSettings(value.ocr),
+    speech: speechSettings(value.speech),
     features,
     localTools: {
       context: features.readTools || features.compaction,
       images: features.imageReads,
       read: features.readTools,
-      write: features.readTools && features.writeTools,
+      write: features.writeTools,
       todos: features.todoTool,
     },
     firecrawl: {
